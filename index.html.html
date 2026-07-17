@@ -85,4 +85,6 @@ function renderResults(){
 function show(id){document.querySelectorAll('.view').forEach(x=>x.classList.toggle('active',x.id===id));document.querySelectorAll('.nav').forEach(x=>x.classList.toggle('active',x.dataset.view===id));if(id==='games')renderGames();if(id==='score')renderScore();if(id==='results')renderResults();if(id==='rules')renderRules();window.scrollTo(0,0)}
 function newRound(){if(confirm('Clear the group and start a new round?')){state.scores={};state.events={};state.current=1;show('setup')}}
 seed();renderStrokeIndexes();
-</script></body></html>
+</script>
+<script defer src="https://cdn.vercel-insights.com/v1/script.js"></script>
+</body></html>
