@@ -51,6 +51,7 @@ const X = (p) => <Icon {...p}><line x1="18" y1="6" x2="6" y2="18" /><line x1="6"
 const ChevronDown = (p) => <Icon {...p}><polyline points="6 9 12 15 18 9" /></Icon>;
 const RotateCcw = (p) => <Icon {...p}><path d="M3 12a9 9 0 1 0 3-6.7" /><polyline points="3 3 3 9 9 9" /></Icon>;
 const Info = (p) => <Icon {...p}><circle cx="12" cy="12" r="10" /><line x1="12" y1="16" x2="12" y2="12" /><line x1="12" y1="8" x2="12.01" y2="8" /></Icon>;
+const Check = (p) => <Icon {...p}><polyline points="20 6 9 17 4 12" /></Icon>;
 
 // ==== app code (same logic as the in-chat version) ====
 
@@ -130,6 +131,31 @@ const SAMPLE_PLAYERS = [
   { name: 'Jake Wright', ghin: '11', handicap: 4.5 },
 ];
 
+// ---------- casual game library (for non-league rounds) ----------
+const GAME_LIBRARY = [
+  { id: 'match', name: 'Match Play', min: 2, max: 2, ideal: [2], tags: ['head-to-head'], blurb: 'Win holes, not strokes — most holes won takes the match.', rules: 'Each hole is its own contest: lowest score wins the hole, ties halve it. The match ends when one player is up by more holes than remain (e.g. "3 & 2"). A blow-up hole only costs you that one hole.', bet: 'Set a value for the match; add presses (new side bets) when someone goes 2 down.', scoring: 'match' },
+  { id: 'nassau', name: 'Nassau', min: 2, max: 4, ideal: [2, 4], tags: ['head-to-head', 'classic bet'], blurb: 'Three bets in one: front 9, back 9, and overall 18.', rules: 'Play match play (or stroke play) but score the front nine, back nine, and full round as three separate bets. Losing the front badly still leaves two live bets. With 3 players, run individual matchups against each opponent. With 4, play it 2v2.', bet: 'The classic is $5/$5/$5. Allow an automatic press when a side goes 2 down on any bet.', scoring: 'nassau' },
+  { id: 'skins', name: 'Skins', min: 2, max: 8, ideal: [3, 4], tags: ['per-hole', 'drama'], blurb: 'Win a hole outright to bank the skin — ties carry over and stack.', rules: 'Every hole is worth one skin. Lowest score wins it, but only if outright — any tie rolls the skin to the next hole, so a few carryovers can make one putt worth five holes of money. Works gross or net with handicaps.', bet: 'Fix a $ value per skin, settle at the end. Value carryovers make the back nine wild.', scoring: 'skins' },
+  { id: 'stroke', name: 'Stroke Play', min: 2, max: 8, ideal: [2, 3], tags: ['classic'], blurb: 'Count every shot — lowest total wins. The purest test.', rules: 'Add up all strokes for the round; lowest gross (or net, applying course handicaps) wins. Simple, but one disaster hole can end your day, which is why groups often layer another game on top.', bet: 'Flat amount to the winner, or $ per stroke difference between players.', scoring: 'stroke' },
+  { id: 'stableford', name: 'Stableford', min: 2, max: 8, ideal: [3, 4, 5], tags: ['points', 'mixed skill'], blurb: 'Points per hole (par 2, birdie 3…) — a blow-up hole can\'t sink you.', rules: 'Score points on each hole relative to par: double bogey or worse 0, bogey 1, par 2, birdie 3, eagle 4. Highest points total wins. Encourages aggressive play since a triple costs no more than a double.', bet: 'Flat bet to the winner, or $ per point separating each player.', scoring: 'stableford' },
+  { id: 'quota', name: 'Quota (Dogfight)', min: 3, max: 8, ideal: [4, 5, 6], tags: ['points', 'mixed skill'], blurb: 'Beat your personal points target — your league\'s home format.', rules: 'Each player gets a quota (36 − handicap) and earns Stableford points during the round. Finish is ranked by points over/under your own quota, so a 15-handicap and a 3-handicap compete dead even. This is the same format as your Dogfight League — for a league round, use Rounds & Scores instead.', bet: 'Everyone antes; best +/- vs. quota takes the pot or splits by finish.', scoring: 'quota' },
+  { id: 'nines', name: 'Nines (5-3-1)', min: 3, max: 3, ideal: [3], tags: ['per-hole', 'threesome special'], blurb: 'Built for exactly 3 — nine points split every hole.', rules: 'Each hole splits 9 points: 5 for the best score, 3 for second, 1 for worst. Ties split the pool (e.g. two tied for low take 4 each). Everyone stays live on every hole, which is why it\'s the go-to threesome game. Fun variant: an outright birdie win takes 7-1-1.', bet: 'Settle $ per point difference at the end.', scoring: 'nines' },
+  { id: 'wolf', name: 'Wolf', min: 3, max: 5, ideal: [4], tags: ['team', 'strategy'], blurb: 'Rotating captain picks a partner after tee shots — or goes lone wolf.', rules: 'The Wolf rotates each hole and tees off last. After watching each drive, the Wolf either picks that player as a partner (2v2, best ball) or passes; passing everyone means going Lone Wolf, 1v3 for double points. Points swing on best ball per side. Variants exist for 3 and 5 players.', bet: 'Common: partner win 2 pts each, lone wolf win 6, lone wolf loss pays the field 2 each. $ per point.', scoring: 'wolf' },
+  { id: 'vegas', name: 'Vegas', min: 4, max: 4, ideal: [4], tags: ['team', 'high stakes'], blurb: '2v2 where scores combine into a two-digit number — huge swings.', rules: 'Teams of two pair (not add) their scores: a 4 and a 5 becomes 45, low number first. Lowest team number wins the difference in points (45 vs 56 = 11 points). If someone makes 10+, their team\'s number flips high-first (10 and 4 = 104). Some groups flip the loser\'s digits on a birdie — brutal.', bet: 'Pick a small $ per point — swings stack up much faster than you expect.', scoring: 'manual' },
+  { id: 'bestball', name: 'Best Ball (Four-Ball)', min: 4, max: 4, ideal: [4], tags: ['team'], blurb: '2v2 — everyone plays their own ball, best score counts per side.', rules: 'Split into two teams. Each player plays their own ball the whole way; the lower of the two scores on each hole counts for the team. Score it as match play or total strokes. Great when skill levels are mixed since a partner can cover your bad hole.', bet: 'One team bet per nine or per match; press when down 2.', scoring: 'manual' },
+  { id: 'altshot', name: 'Alternate Shot (Foursomes)', min: 4, max: 4, ideal: [4], tags: ['team', 'fast'], blurb: '2v2, one ball per team, partners alternate hitting it.', rules: 'Each team plays a single ball, alternating shots, with players alternating tee shots by hole (one takes odds, one evens). Plays fast and puts a premium on not putting your partner in jail. The Ryder Cup format.', bet: 'One match bet; keep it friendly — this game strains partnerships enough already.', scoring: 'manual' },
+  { id: 'chapman', name: 'Chapman (Pinehurst)', min: 4, max: 4, ideal: [4], tags: ['team'], blurb: 'Both partners tee off, swap balls, pick one, alternate in.', rules: 'Both players on a team hit drives, then each hits their partner\'s ball for the second shot. The team then picks the better ball and alternates shots from there until holed. A best-of-both mix of scramble and alternate shot.', bet: 'Match play bet between the two teams.', scoring: 'manual' },
+  { id: 'sixes', name: 'Sixes (Hollywood)', min: 4, max: 4, ideal: [4], tags: ['team', 'rotating'], blurb: '2v2 with partners rotating every six holes — everyone partners everyone.', rules: 'Play three six-hole matches, switching partners each time so all three pairings happen. Score each six-hole segment as its own best-ball match. Nobody gets stuck with (or carried by) the same partner all day.', bet: 'Each six-hole match is its own bet; points or $ per match won.', scoring: 'manual' },
+  { id: 'scramble', name: 'Scramble', min: 2, max: 8, ideal: [4], tags: ['team', 'casual', 'mixed skill'], blurb: 'Everyone hits, play the best one, repeat. Pure fun.', rules: 'All players tee off, the team picks the best ball, and everyone plays their next shot from that spot — repeat into the hole. The classic outing format because every skill level contributes and scores are low.', bet: 'Team vs team if you have 4+; otherwise chase a target score.', scoring: 'manual' },
+  { id: 'shamble', name: 'Shamble', min: 4, max: 8, ideal: [4], tags: ['team', 'casual'], blurb: 'Scramble off the tee, then play your own ball in.', rules: 'Everyone tees off and the team picks the best drive — then each player plays their own ball from there into the hole, with the best individual score(s) counting. More individual golf than a scramble while still forgiving bad drives.', bet: 'Count one or two best balls per team per hole.', scoring: 'manual' },
+  { id: 'bbb', name: 'Bingo Bango Bongo', min: 2, max: 5, ideal: [3, 4], tags: ['per-hole', 'mixed skill'], blurb: '3 points a hole: first on, closest once all on, first in.', rules: 'Bingo = first ball on the green, Bango = closest to the pin once everyone is on, Bongo = first ball holed. Order of play matters, so honors and away-ball etiquette are strictly enforced. High handicaps can win points without ever winning a hole.', bet: '$ per point at the end. The great equalizer for mixed groups.', scoring: 'bbb' },
+  { id: 'rabbit', name: 'Rabbit', min: 2, max: 5, ideal: [3, 4], tags: ['side game'], blurb: 'Win a hole to grab the rabbit — hold it when a nine ends to win.', rules: 'Winning a hole outright "captures the rabbit." Another player winning a later hole outright sets it free; winning again captures it. Whoever holds the rabbit after the 9th and 18th wins that leg. Keeps late holes tense even in a lopsided round.', bet: 'Set a value per leg (front rabbit, back rabbit).', scoring: 'manual' },
+  { id: 'snake', name: 'Snake', min: 2, max: 6, ideal: [3, 4], tags: ['side game', 'putting'], blurb: 'Three-putt and you\'re holding the snake — last holder pays.', rules: 'Whoever three-putts takes the snake and holds it until someone else three-putts. Whoever is holding it after 18 pays. Some groups grow the pot with every three-putt during the round. Suddenly four-footers matter a lot.', bet: 'Loser pays each player a fixed amount, or the pot grows per three-putt.', scoring: 'manual' },
+  { id: 'banker', name: 'Banker (Defender)', min: 3, max: 6, ideal: [4], tags: ['per-hole', 'strategy'], blurb: 'One player defends each hole against everyone at once.', rules: 'A rotating Banker plays every other player in a separate head-to-head bet on that hole. Others can raise the stake before teeing off; the Banker wins or loses each matchup independently. Rotates so everyone banks the same number of holes.', bet: 'Small base bet per matchup; raises before the tee shot only.', scoring: 'manual' },
+  { id: 'hammer', name: 'Hammer', min: 2, max: 4, ideal: [2, 4], tags: ['high stakes', 'strategy'], blurb: 'Double the bet mid-hole — accept or concede on the spot.', rules: 'Either side can "hammer" at any point during a hole — usually after a great or terrible shot — doubling the bet. The other side must accept the new stake or concede the hole immediately. Bets can double multiple times on a single hole.', bet: 'Start tiny ($1/hole). It won\'t stay tiny.', scoring: 'manual' },
+  { id: 'trash', name: 'Dots (Trash)', min: 2, max: 6, ideal: [3, 4], tags: ['side game'], blurb: 'Points for the fun stuff: sandies, greenies, barkies, chip-ins.', rules: 'Agree on a menu of achievements worth a dot each: Greenie (par-3 green in one, then par), Sandie (par from a bunker), Barkie (par after hitting a tree), Chip-in, Polie (putt longer than the flagstick). Most dots at the end wins.', bet: '$ per dot difference. Runs happily alongside any other game.', scoring: 'manual' },
+];
+
 function makeDefaultPlayers() {
   return SAMPLE_PLAYERS.map((p, i) => ({ id: uid(), name: p.name, ghin: p.ghin, handicap: p.handicap, team: i % 2 === 0 ? 'team1' : 'team2' }));
 }
@@ -137,7 +163,9 @@ function makeDefaultPlayers() {
 const TABS = [
   { id: 'standings', label: 'Standings' },
   { id: 'rounds', label: 'Rounds & Scores' },
+  { id: 'calendar', label: 'Calendar' },
   { id: 'skins', label: 'Skins' },
+  { id: 'gamefinder', label: 'Game Finder' },
   { id: 'players', label: 'Players' },
   { id: 'settings', label: 'Settings' },
   { id: 'howitworks', label: 'How It Works' },
@@ -164,6 +192,15 @@ function stablefordPoints(strokes, par) {
   if (d === -1) return 3;
   if (d === -2) return 4;
   return 5;
+}
+function scoreColor(strokes, par) {
+  if (strokes == null) return C.faint;
+  const d = strokes - par;
+  if (d <= -2) return C.gold;
+  if (d === -1) return C.lime;
+  if (d === 0) return C.text;
+  if (d === 1) return C.orange;
+  return C.red;
 }
 function roundHoles(round, course) {
   return round.holes === 9 ? course.holes.slice(0, 9) : course.holes;
@@ -198,6 +235,23 @@ function playerQuotaInRound(settings, round, player, course) {
 function roundPlayerList(round, players) {
   if (Array.isArray(round.playerIds)) return players.filter((p) => round.playerIds.includes(p.id));
   return players; // backward compat: rounds created before player-selection existed show everyone
+}
+function roundGameLabel(round) {
+  const game = GAME_LIBRARY.find((g) => g.id === round.gameId) || null;
+  if (game) return game.name;
+  return round.casual ? 'Casual Round' : 'Dogfight League';
+}
+function roundNamesLabel(roundPlayers) {
+  const firsts = roundPlayers.map((p) => (p.name || '').trim().split(/\s+/)[0] || p.name);
+  if (firsts.length === 0) return 'No players selected';
+  if (firsts.length <= 4) return firsts.join(', ');
+  return firsts.slice(0, 3).join(', ') + ` +${firsts.length - 3} more`;
+}
+function formatRoundDate(iso) {
+  if (!iso) return '';
+  const d = new Date(iso + 'T00:00:00');
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 function courseHandicapFor(round, player, course) {
   const tee = getTee(course, round.teeName);
@@ -360,6 +414,136 @@ function computeSkinsForRound(round, allPlayers, course, settings) {
   players.forEach((p) => (payouts[p.id] = totalSkins > 0 ? Math.round((tally[p.id] / totalSkins) * pot * 100) / 100 : 0));
   return { pot, players, tally, payouts, totalSkins, carry, thru };
 }
+// ---------- casual game scoring engines (built purely from raw per-hole gross scores) ----------
+function grossOf(round, playerId, holeIdx) {
+  return round.playerData[playerId]?.holeScores?.[holeIdx];
+}
+function strokePlayBoard(round, course, players) {
+  const holes = roundHoles(round, course);
+  return players
+    .map((p) => {
+      let total = 0,
+        thru = 0;
+      holes.forEach((h, i) => {
+        const g = grossOf(round, p.id, i);
+        if (g != null) {
+          total += g;
+          thru++;
+        }
+      });
+      return { p, total, thru };
+    })
+    .sort((a, b) => (a.thru === 0 ? 1 : b.thru === 0 ? -1 : a.total - b.total));
+}
+function stablefordBoard(round, course, players) {
+  const holes = roundHoles(round, course);
+  return players
+    .map((p) => {
+      let total = 0,
+        thru = 0;
+      holes.forEach((h, i) => {
+        const g = grossOf(round, p.id, i);
+        if (g != null) {
+          total += stablefordPoints(g, h.par);
+          thru++;
+        }
+      });
+      return { p, total, thru };
+    })
+    .sort((a, b) => b.total - a.total);
+}
+function matchSegment(round, course, players, startHole, endHole) {
+  if (players.length !== 2) return null;
+  const holes = roundHoles(round, course);
+  const end = Math.min(endHole, holes.length);
+  const [a, b] = players;
+  let diff = 0,
+    thru = 0;
+  for (let h = startHole; h < end; h++) {
+    const av = grossOf(round, a.id, h);
+    const bv = grossOf(round, b.id, h);
+    if (av == null || bv == null) break;
+    thru++;
+    if (av < bv) diff++;
+    else if (bv < av) diff--;
+  }
+  const segHoles = end - startHole;
+  const remaining = segHoles - thru;
+  const clinched = thru > 0 && Math.abs(diff) > remaining;
+  return { diff, thru, remaining, clinched, segHoles, a, b };
+}
+function matchLabel(seg) {
+  if (!seg || seg.thru === 0) return 'Not started';
+  if (seg.clinched) return `${Math.abs(seg.diff)} & ${seg.remaining}`;
+  if (seg.diff === 0) return `All Square · thru ${seg.thru}`;
+  return `${Math.abs(seg.diff)} UP · thru ${seg.thru}`;
+}
+function ninesBoard(round, course, players) {
+  if (players.length !== 3) return null;
+  const holes = roundHoles(round, course);
+  const pts = {};
+  players.forEach((p) => (pts[p.id] = 0));
+  let thru = 0;
+  for (let h = 0; h < holes.length; h++) {
+    const vals = players.map((p) => ({ id: p.id, v: grossOf(round, p.id, h) }));
+    if (vals.some((v) => v.v == null)) break;
+    thru = h + 1;
+    const sorted = [...vals].sort((a, b) => a.v - b.v);
+    const POOL = [5, 3, 1];
+    let i = 0;
+    while (i < 3) {
+      let j = i;
+      while (j + 1 < 3 && sorted[j + 1].v === sorted[i].v) j++;
+      const group = sorted.slice(i, j + 1);
+      const share = POOL.slice(i, j + 1).reduce((a, b) => a + b, 0) / group.length;
+      group.forEach((m) => (pts[m.id] += share));
+      i = j + 1;
+    }
+  }
+  return { pts, thru };
+}
+function wolfBoard(round, course, players) {
+  const picks = round.gameData?.wolfPicks || {};
+  const holes = roundHoles(round, course);
+  const pts = {};
+  players.forEach((p) => (pts[p.id] = 0));
+  let thru = 0;
+  for (let h = 0; h < holes.length; h++) {
+    const pick = picks[h];
+    const allScores = players.every((p) => grossOf(round, p.id, h) != null);
+    if (!pick || !pick.wolf || !allScores) break;
+    if (!pick.partner && !pick.lone) break;
+    thru = h + 1;
+    const wolfId = pick.wolf;
+    const others = players.map((p) => p.id).filter((id) => id !== wolfId);
+    if (pick.lone) {
+      const wolfScore = grossOf(round, wolfId, h);
+      const bestOther = Math.min(...others.map((id) => grossOf(round, id, h)));
+      if (wolfScore < bestOther) pts[wolfId] += 6;
+      else if (wolfScore > bestOther) others.forEach((id) => (pts[id] += 2));
+    } else {
+      const teamIds = [wolfId, pick.partner];
+      const oppIds = others.filter((id) => id !== pick.partner);
+      const teamBest = Math.min(...teamIds.map((id) => grossOf(round, id, h)));
+      const oppBest = Math.min(...oppIds.map((id) => grossOf(round, id, h)));
+      if (teamBest < oppBest) teamIds.forEach((id) => (pts[id] += 2));
+      else if (oppBest < teamBest) oppIds.forEach((id) => (pts[id] += 2));
+    }
+  }
+  return { pts, thru };
+}
+function bbbBoard(round, players) {
+  const picks = round.gameData?.bbbPicks || {};
+  const pts = {};
+  players.forEach((p) => (pts[p.id] = 0));
+  Object.values(picks).forEach((h) => {
+    ['bingo', 'bango', 'bongo'].forEach((k) => {
+      if (h[k]) pts[h[k]] = (pts[h[k]] || 0) + 1;
+    });
+  });
+  return pts;
+}
+
 function purseForRound(settings, round, players, course) {
   const scored = players.filter((p) => playerPointsInRound(round, p, course) != null);
   const pot = settings.purseBuyIn * scored.length;
@@ -517,10 +701,74 @@ function InfoNote({ children }) {
     </div>
   );
 }
+function BoardRow({ rank, name, value, sub }) {
+  return (
+    <div className="flex items-center justify-between py-2" style={{ borderBottom: `1px solid ${C.border}` }}>
+      <div className="flex items-center gap-2 min-w-0">
+        <span className="font-display text-xs w-4" style={{ color: rank === 1 ? C.gold : C.faint }}>
+          {rank}
+        </span>
+        <span className="truncate" style={{ color: rank === 1 ? C.text : C.muted, fontWeight: rank === 1 ? 700 : 500 }}>
+          {name}
+        </span>
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        {sub && (
+          <span className="text-[10px]" style={{ color: C.faint }}>
+            {sub}
+          </span>
+        )}
+        <span className="font-display text-base" style={{ color: rank === 1 ? C.gold : C.text }}>
+          {value}
+        </span>
+      </div>
+    </div>
+  );
+}
+function EmptyNote({ text }) {
+  return (
+    <Card>
+      <p className="text-sm text-center" style={{ color: C.muted }}>
+        {text}
+      </p>
+    </Card>
+  );
+}
+function ConfirmDialog({ title, message, confirmLabel = 'Delete', onConfirm, onCancel }) {
+  return (
+    <div
+      className="fixed inset-0 flex items-center justify-center p-4"
+      style={{ background: 'rgba(0,0,0,0.75)', zIndex: 100 }}
+      onClick={onCancel}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full rounded-3xl p-5"
+        style={{ maxWidth: 380, background: C.surface, border: `1.5px solid ${C.red}` }}
+      >
+        <div className="font-display text-xl mb-2" style={{ color: C.text }}>
+          {title}
+        </div>
+        <p className="text-sm mb-5" style={{ color: C.muted }}>
+          {message}
+        </p>
+        <div className="flex gap-2">
+          <GhostButton onClick={onCancel} style={{ flex: 1, textAlign: 'center' }}>
+            Cancel
+          </GhostButton>
+          <PrimaryButton onClick={onConfirm} style={{ flex: 1, textAlign: 'center', background: C.red, color: '#fff' }}>
+            {confirmLabel}
+          </PrimaryButton>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ---------- Standings tab ----------
 function StandingsTab({ settings, players, rounds, courses, onGoPlayers }) {
-  const season = computeSeason(settings, rounds, courses, players);
+  const leagueRounds = rounds.filter((r) => !r.casual);
+  const season = computeSeason(settings, leagueRounds, courses, players);
   const team1 = players.filter((p) => p.team === 'team1');
   const team2 = players.filter((p) => p.team === 'team2');
   const t1pts = team1.reduce((s, p) => s + (season.seasonTotals[p.id] || 0), 0);
@@ -532,7 +780,7 @@ function StandingsTab({ settings, players, rounds, courses, onGoPlayers }) {
 
   const moneyByPlayer = {};
   players.forEach((p) => (moneyByPlayer[p.id] = 0));
-  rounds.forEach((r) => {
+  leagueRounds.forEach((r) => {
     const course = courses.find((c) => c.id === r.courseId);
     if (!course) return;
     const { payouts } = purseForRound(settings, r, players, course);
@@ -541,14 +789,14 @@ function StandingsTab({ settings, players, rounds, courses, onGoPlayers }) {
   const t1money = team1.reduce((s, p) => s + moneyByPlayer[p.id], 0);
   const t2money = team2.reduce((s, p) => s + moneyByPlayer[p.id], 0);
 
-  const moneyInPlay = rounds.reduce((sum, r) => {
+  const moneyInPlay = leagueRounds.reduce((sum, r) => {
     const course = courses.find((c) => c.id === r.courseId);
     if (!course) return sum;
     const scored = players.filter((p) => playerPointsInRound(r, p, course) != null).length;
     return sum + settings.purseBuyIn * scored;
   }, 0);
   const seasonBuyIns = settings.seasonBuyIn * players.length;
-  const countingRounds = rounds.filter((r) => {
+  const countingRounds = leagueRounds.filter((r) => {
     const course = courses.find((c) => c.id === r.courseId);
     return course && players.some((p) => playerPointsInRound(r, p, course) != null);
   });
@@ -624,14 +872,14 @@ function StandingsTab({ settings, players, rounds, courses, onGoPlayers }) {
           Season Standings
         </div>
         <div className="text-xs mb-3" style={{ color: C.muted }}>
-          {rounds.length} round{rounds.length === 1 ? '' : 's'} played · {players.length} players · ${moneyInPlay.toLocaleString()} put in play
+          {leagueRounds.length} round{leagueRounds.length === 1 ? '' : 's'} played · {players.length} players · ${moneyInPlay.toLocaleString()} put in play
         </div>
         <div className="grid grid-cols-2 gap-3 mb-3">
           <StatTile label="Current Leader" value={leader ? leader.name : '—'} />
           <StatTile label="Leader's Pts" value={leader ? season.seasonTotals[leader.id] : '—'} sub="season pts" />
         </div>
         <div className="grid grid-cols-2 gap-3">
-          <StatTile label="Rounds Played" value={rounds.length} />
+          <StatTile label="Rounds Played" value={leagueRounds.length} />
           <StatTile label="Money In Play" value={`$${moneyInPlay.toLocaleString()}`} />
         </div>
       </Card>
@@ -712,7 +960,7 @@ function SkinsTab({ settings, players, rounds, courses }) {
                   {round.date}
                 </div>
                 <div className="text-xs" style={{ color: C.muted }}>
-                  {course.name} · {round.holes}-hole
+                  {course.name} · {round.holes}-hole {round.casual && <span style={{ color: C.cyan }}>· casual</span>}
                 </div>
               </div>
               <StatTile label="Pot" value={`$${skins.pot}`} />
@@ -735,6 +983,438 @@ function SkinsTab({ settings, players, rounds, courses }) {
             )}
           </Card>
         ))
+      )}
+    </div>
+  );
+}
+
+// ---------- Calendar tab (availability scheduling) ----------
+function isoDate(y, m, d) {
+  return `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}
+function dayAvailability(availability, dateKey) {
+  return availability[dateKey] || {};
+}
+function countAvail(dayData, session) {
+  return Object.values(dayData).filter((v) => v && v[session]).length;
+}
+function CalendarTab({ players, availability, setAvailability }) {
+  const today = new Date();
+  const todayKey = isoDate(today.getFullYear(), today.getMonth(), today.getDate());
+  const [viewYear, setViewYear] = useState(today.getFullYear());
+  const [viewMonth, setViewMonth] = useState(today.getMonth());
+  const [selectedDay, setSelectedDay] = useState(todayKey);
+
+  function shiftMonth(delta) {
+    let m = viewMonth + delta,
+      y = viewYear;
+    if (m < 0) {
+      m = 11;
+      y--;
+    }
+    if (m > 11) {
+      m = 0;
+      y++;
+    }
+    setViewMonth(m);
+    setViewYear(y);
+  }
+
+  function toggleAvail(dateKey, playerId, session) {
+    setAvailability((av) => {
+      const day = { ...(av[dateKey] || {}) };
+      const cur = { am: false, pm: false, ...(day[playerId] || {}) };
+      cur[session] = !cur[session];
+      if (!cur.am && !cur.pm) delete day[playerId];
+      else day[playerId] = cur;
+      const next = { ...av };
+      if (Object.keys(day).length === 0) delete next[dateKey];
+      else next[dateKey] = day;
+      return next;
+    });
+  }
+
+  const monthName = new Date(viewYear, viewMonth, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const firstDow = new Date(viewYear, viewMonth, 1).getDay();
+  const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+  const cells = [];
+  for (let i = 0; i < firstDow; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+
+  const selData = dayAvailability(availability, selectedDay);
+  const selDate = new Date(selectedDay + 'T00:00:00');
+  const selLabel = isNaN(selDate.getTime()) ? selectedDay : selDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+  const amPlayers = players.filter((p) => selData[p.id]?.am);
+  const pmPlayers = players.filter((p) => selData[p.id]?.pm);
+
+  // upcoming days (from today) with any availability, for the tee-time planner
+  const upcoming = Object.keys(availability)
+    .filter((k) => k >= todayKey)
+    .sort()
+    .slice(0, 6)
+    .map((k) => {
+      const d = dayAvailability(availability, k);
+      return { key: k, am: countAvail(d, 'am'), pm: countAvail(d, 'pm') };
+    })
+    .filter((x) => x.am > 0 || x.pm > 0);
+
+  function SessionSection({ label, session, icon, availList }) {
+    return (
+      <div className="mb-4 last:mb-0">
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-[10px] uppercase tracking-wide" style={{ color: C.lime }}>
+            {icon} {label}
+          </div>
+          <div className="text-[11px] font-display" style={{ color: availList.length >= 2 ? C.gold : C.faint }}>
+            {availList.length} in{availList.length >= 4 ? ' — full group!' : availList.length >= 2 ? ' — enough to play' : ''}
+          </div>
+        </div>
+        {availList.length > 0 && (
+          <div className="text-xs mb-2" style={{ color: C.text }}>
+            {availList.map((p) => p.name.split(/\s+/)[0]).join(', ')}
+          </div>
+        )}
+        <div className="flex flex-wrap gap-2">
+          {players.map((p) => {
+            const on = selData[p.id]?.[session];
+            return (
+              <button
+                key={p.id}
+                onClick={() => toggleAvail(selectedDay, p.id, session)}
+                className="px-3 py-1.5 rounded-full text-xs font-semibold"
+                style={{ background: on ? C.lime : C.surface2, color: on ? '#000' : C.muted }}
+              >
+                {p.name.split(/\s+/)[0]}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <Card>
+        <div className="flex items-center justify-between mb-3">
+          <button onClick={() => shiftMonth(-1)} className="w-9 h-9 rounded-full flex items-center justify-center" style={{ background: C.surface2, color: C.text }}>
+            ‹
+          </button>
+          <div className="font-display text-xl" style={{ color: C.text }}>
+            {monthName}
+          </div>
+          <button onClick={() => shiftMonth(1)} className="w-9 h-9 rounded-full flex items-center justify-center" style={{ background: C.surface2, color: C.text }}>
+            ›
+          </button>
+        </div>
+        <div className="grid grid-cols-7 gap-1 mb-1">
+          {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => (
+            <div key={i} className="text-center text-[10px] uppercase py-1" style={{ color: C.faint }}>
+              {d}
+            </div>
+          ))}
+        </div>
+        <div className="grid grid-cols-7 gap-1">
+          {cells.map((d, i) => {
+            if (d == null) return <div key={i} />;
+            const key = isoDate(viewYear, viewMonth, d);
+            const dayData = dayAvailability(availability, key);
+            const am = countAvail(dayData, 'am');
+            const pm = countAvail(dayData, 'pm');
+            const isToday = key === todayKey;
+            const isSelected = key === selectedDay;
+            return (
+              <button
+                key={i}
+                onClick={() => setSelectedDay(key)}
+                className="rounded-xl flex flex-col items-center justify-center py-1.5"
+                style={{
+                  background: isSelected ? C.lime : C.surface2,
+                  border: isToday && !isSelected ? `1.5px solid ${C.lime}` : '1.5px solid transparent',
+                  minHeight: 44,
+                }}
+              >
+                <span className="font-display text-sm leading-none" style={{ color: isSelected ? '#000' : C.text }}>
+                  {d}
+                </span>
+                {(am > 0 || pm > 0) && (
+                  <span className="flex gap-0.5 mt-1">
+                    {am > 0 && <span className="w-1.5 h-1.5 rounded-full" style={{ background: isSelected ? '#000' : C.lime }} />}
+                    {pm > 0 && <span className="w-1.5 h-1.5 rounded-full" style={{ background: isSelected ? '#000' : C.gold }} />}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+        <div className="flex items-center gap-3 mt-3 text-[10px]" style={{ color: C.faint }}>
+          <span>
+            <span className="inline-block w-1.5 h-1.5 rounded-full mr-1" style={{ background: C.lime }} />
+            morning
+          </span>
+          <span>
+            <span className="inline-block w-1.5 h-1.5 rounded-full mr-1" style={{ background: C.gold }} />
+            afternoon
+          </span>
+          <span className="ml-auto">Tap your name to mark yourself in</span>
+        </div>
+      </Card>
+
+      <Card>
+        <div className="font-display text-lg mb-3" style={{ color: C.text }}>
+          {selLabel}
+        </div>
+        <SessionSection label="Morning" session="am" icon="🌅" availList={amPlayers} />
+        <SessionSection label="Afternoon" session="pm" icon="🌇" availList={pmPlayers} />
+      </Card>
+
+      {upcoming.length > 0 && (
+        <Card>
+          <div className="font-display text-lg mb-1" style={{ color: C.text }}>
+            Tee Time Planner
+          </div>
+          <p className="text-xs mb-2" style={{ color: C.muted }}>
+            Upcoming days with players marked available — tap one to see who's in.
+          </p>
+          {upcoming.map(({ key, am, pm }) => {
+            const d = new Date(key + 'T00:00:00');
+            const label = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+            return (
+              <button key={key} onClick={() => setSelectedDay(key)} className="w-full flex items-center justify-between py-2" style={{ borderBottom: `1px solid ${C.border}` }}>
+                <span className="text-sm" style={{ color: C.text }}>
+                  {label}
+                </span>
+                <span className="text-xs font-display" style={{ color: C.muted }}>
+                  {am > 0 && <span style={{ color: C.lime }}>{am} AM</span>}
+                  {am > 0 && pm > 0 && ' · '}
+                  {pm > 0 && <span style={{ color: C.gold }}>{pm} PM</span>}
+                </span>
+              </button>
+            );
+          })}
+        </Card>
+      )}
+    </div>
+  );
+}
+
+// ---------- Game Finder tab (casual, non-league rounds) ----------
+function GameFinderTab({ players, courses, setRounds, setEditingRoundId, setActiveTab }) {
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [guests, setGuests] = useState(0);
+  const [expandedId, setExpandedId] = useState(null);
+  const [selectedGameId, setSelectedGameId] = useState(null);
+
+  const n = selectedIds.length + guests;
+  const selectedGame = GAME_LIBRARY.find((g) => g.id === selectedGameId) || null;
+
+  function toggle(id) {
+    setSelectedIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
+  }
+  function selectGame(id) {
+    setSelectedGameId((cur) => (cur === id ? null : id));
+    setExpandedId(id);
+  }
+
+  function beginCasualRound() {
+    if (selectedIds.length === 0) return;
+    const course = courses[0];
+    const r = {
+      id: uid(),
+      date: new Date().toISOString().slice(0, 10),
+      courseId: course.id,
+      teeName: course.tees[0].name,
+      holes: 18,
+      entryMode: 'holebyhole',
+      combinedWith: null,
+      playerIds: selectedIds,
+      skinsOptIn: [],
+      playerData: {},
+      status: 'setup',
+      currentHole: 0,
+      pointsBasis: 'gross',
+      casual: true,
+      gameId: selectedGameId,
+      gameData: {},
+    };
+    setRounds((rs) => [r, ...rs]);
+    setEditingRoundId(r.id);
+    setActiveTab('rounds');
+  }
+
+  const perfect = GAME_LIBRARY.filter((g) => n >= g.min && n <= g.max && g.ideal.includes(n));
+  const works = GAME_LIBRARY.filter((g) => n >= g.min && n <= g.max && !g.ideal.includes(n));
+  const notNow = GAME_LIBRARY.filter((g) => n < g.min || n > g.max);
+
+  function GameRow({ g, dim, selectable }) {
+    const open = expandedId === g.id;
+    const selected = selectedGameId === g.id;
+    return (
+      <div
+        className="w-full rounded-2xl p-3 mb-2"
+        style={{ background: selected ? '#12140A' : open ? C.surface3 : C.surface2, border: `1.5px solid ${selected ? C.lime : open ? C.border : C.border}`, opacity: dim ? 0.45 : 1 }}
+      >
+        <button onClick={() => setExpandedId(open ? null : g.id)} className="w-full text-left">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              {selected && <Check size={14} style={{ color: C.lime, flexShrink: 0 }} />}
+              <span className="font-display text-base truncate" style={{ color: C.text }}>
+                {g.name}
+              </span>
+            </div>
+            <span className="text-[10px] font-display shrink-0" style={{ color: C.muted }}>
+              {g.min === g.max ? `${g.min} players` : `${g.min}–${g.max} players`}
+            </span>
+          </div>
+          <div className="text-xs mt-0.5" style={{ color: C.muted }}>
+            {g.blurb}
+          </div>
+          <div className="flex flex-wrap gap-1 mt-1.5">
+            {g.tags.map((t) => (
+              <span key={t} className="px-1.5 py-0.5 rounded-full text-[9px] uppercase tracking-wide" style={{ background: C.surface3, color: C.faint, border: `1px solid ${C.border}` }}>
+                {t}
+              </span>
+            ))}
+            {g.scoring !== 'manual' && (
+              <span className="px-1.5 py-0.5 rounded-full text-[9px] uppercase tracking-wide" style={{ background: 'rgba(180,255,57,0.12)', color: C.lime, border: `1px solid ${C.lime}` }}>
+                auto-scored
+              </span>
+            )}
+          </div>
+          {dim && (
+            <div className="text-[11px] mt-1.5 font-semibold" style={{ color: C.pink }}>
+              {n < g.min ? `Needs at least ${g.min} players` : `Max ${g.max} players`}
+            </div>
+          )}
+        </button>
+        {open && (
+          <div className="mt-2 pt-2" style={{ borderTop: `1px solid ${C.border}` }}>
+            <div className="text-[10px] uppercase tracking-wide mb-1" style={{ color: C.lime }}>
+              How to play
+            </div>
+            <p className="text-xs leading-relaxed" style={{ color: C.text }}>
+              {g.rules}
+            </p>
+            <div className="text-[10px] uppercase tracking-wide mt-2 mb-1" style={{ color: C.gold }}>
+              The bet
+            </div>
+            <p className="text-xs leading-relaxed mb-2" style={{ color: C.muted }}>
+              {g.bet}
+            </p>
+            {selectable && (
+              <button
+                onClick={() => selectGame(g.id)}
+                className="w-full py-2 rounded-xl text-xs font-bold text-center"
+                style={{ background: selected ? C.surface2 : C.lime, color: selected ? C.text : '#000' }}
+              >
+                {selected ? '✓ Selected for this round — tap to unselect' : `Play ${g.name}`}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <Card>
+        <div className="font-display text-xl mb-1" style={{ color: C.text }}>
+          Game Finder
+        </div>
+        <p className="text-xs mb-3" style={{ color: C.muted }}>
+          For casual rounds outside the league. Pick who's playing and see every game that fits your group.
+        </p>
+        <div className="grid grid-cols-2 gap-2 mb-3">
+          {players.map((p) => (
+            <button key={p.id} onClick={() => toggle(p.id)} className="flex items-center gap-2 rounded-xl px-3 py-2 text-left" style={{ background: C.surface2 }}>
+              <span
+                className="w-4 h-4 rounded shrink-0"
+                style={{ background: selectedIds.includes(p.id) ? C.lime : 'transparent', border: `1.5px solid ${selectedIds.includes(p.id) ? C.lime : C.faint}` }}
+              />
+              <span className="text-sm truncate" style={{ color: C.text }}>
+                {p.name}
+              </span>
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center justify-between mb-3">
+          <span className="text-xs" style={{ color: C.muted }}>
+            Guests (not in the league)
+          </span>
+          <NumStepper value={guests} onChange={setGuests} min={0} max={8} />
+        </div>
+        {selectedGame && (
+          <div className="flex items-center justify-between rounded-xl px-3 py-2 mb-3" style={{ background: '#12140A', border: `1px solid ${C.lime}` }}>
+            <span className="text-xs" style={{ color: C.muted }}>
+              Playing
+            </span>
+            <span className="font-display text-sm" style={{ color: C.lime }}>
+              {selectedGame.name}
+            </span>
+          </div>
+        )}
+        <PrimaryButton onClick={beginCasualRound} disabled={selectedIds.length === 0} style={{ width: '100%', textAlign: 'center' }}>
+          ▶ Begin Round
+        </PrimaryButton>
+        {selectedIds.length === 0 ? (
+          <div className="text-xs text-center mt-2" style={{ color: C.muted }}>
+            Check off who's playing to begin
+          </div>
+        ) : (
+          <div className="text-[11px] text-center mt-2" style={{ color: C.faint }}>
+            {selectedGame ? `Scores and tracks ${selectedGame.name} live, ` : 'Uses live hole-by-hole scoring, '}just like a league round — but{' '}
+            <span style={{ color: C.cyan, fontWeight: 600 }}>won't count toward Dogfight League standings</span>.
+            {guests > 0 && ' Guests are counted for game suggestions above but can\'t be scored — only players in your Players list can.'}
+          </div>
+        )}
+      </Card>
+
+      {n === 0 ? (
+        <Card>
+          <p className="text-sm text-center" style={{ color: C.muted }}>
+            Select at least one player above to see your options.
+          </p>
+        </Card>
+      ) : (
+        <>
+          <div className="font-display text-lg mb-2 px-1" style={{ color: C.text }}>
+            {n} playing — {perfect.length + works.length} game{perfect.length + works.length === 1 ? '' : 's'} fit
+          </div>
+          {perfect.length > 0 && (
+            <>
+              <SectionLabel>Perfect for {n}</SectionLabel>
+              {perfect.map((g) => (
+                <GameRow key={g.id} g={g} selectable />
+              ))}
+            </>
+          )}
+          {works.length > 0 && (
+            <>
+              <div className="mt-3">
+                <SectionLabel>Also works</SectionLabel>
+              </div>
+              {works.map((g) => (
+                <GameRow key={g.id} g={g} selectable />
+              ))}
+            </>
+          )}
+          {notNow.length > 0 && (
+            <>
+              <div className="mt-3">
+                <div className="text-[11px] uppercase tracking-wide mb-2" style={{ color: C.faint }}>
+                  Needs a different group size
+                </div>
+              </div>
+              {notNow.map((g) => (
+                <GameRow key={g.id} g={g} dim />
+              ))}
+            </>
+          )}
+          <InfoNote>
+            Tap a game to see the rules, then tap "Play [Game]" to select it for this round — it'll show mid-round with a live scoreboard for that format. Games tagged <b style={{ color: C.lime }}>auto-scored</b> get a fully automatic scoreboard; the rest get a simple manual tally plus the rules to score it by hand. Most groups stack a main game with a side game like Snake or Dots.
+          </InfoNote>
+        </>
       )}
     </div>
   );
@@ -861,12 +1541,366 @@ function PlayersTab({ settings, players, setPlayers }) {
 }
 
 // ---------- Live scoring ----------
-function LiveScoring({ settings, round, players, course, patchRound, setHoleScore, onBackToSetup, onFinish }) {
+function WolfPicker({ players, holeIdx, pick, onChange }) {
+  const wolfId = pick?.wolf ?? players[holeIdx % players.length]?.id;
+  const others = players.filter((p) => p.id !== wolfId);
+  return (
+    <div className="rounded-2xl p-3 mb-3" style={{ background: C.surface3, border: `1px solid ${C.border}` }}>
+      <div className="text-[10px] uppercase tracking-wide mb-2" style={{ color: C.lime }}>
+        🐺 Wolf this hole
+      </div>
+      <div className="flex flex-wrap gap-2 mb-2">
+        {players.map((p) => (
+          <button
+            key={p.id}
+            onClick={() => onChange({ wolf: p.id, partner: null, lone: false })}
+            className="px-3 py-1.5 rounded-full text-xs font-semibold"
+            style={{ background: wolfId === p.id ? C.lime : C.surface2, color: wolfId === p.id ? '#000' : C.muted }}
+          >
+            {p.name}
+          </button>
+        ))}
+      </div>
+      <div className="text-[10px] uppercase tracking-wide mb-2" style={{ color: C.lime }}>
+        Partner
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {others.map((p) => (
+          <button
+            key={p.id}
+            onClick={() => onChange({ wolf: wolfId, partner: p.id, lone: false })}
+            className="px-3 py-1.5 rounded-full text-xs font-semibold"
+            style={{ background: pick?.partner === p.id ? C.lime : C.surface2, color: pick?.partner === p.id ? '#000' : C.muted }}
+          >
+            {p.name}
+          </button>
+        ))}
+        <button
+          onClick={() => onChange({ wolf: wolfId, partner: null, lone: true })}
+          className="px-3 py-1.5 rounded-full text-xs font-semibold"
+          style={{ background: pick?.lone ? C.pink : C.surface2, color: pick?.lone ? '#000' : C.muted }}
+        >
+          Go it alone
+        </button>
+      </div>
+    </div>
+  );
+}
+function BBBPicker({ players, pick, onChange }) {
+  const rows = [
+    { key: 'bingo', label: '🟢 Bingo — first on the green' },
+    { key: 'bango', label: '🎯 Bango — closest once all on' },
+    { key: 'bongo', label: '⛳ Bongo — first in the hole' },
+  ];
+  return (
+    <div className="rounded-2xl p-3 mb-3" style={{ background: C.surface3, border: `1px solid ${C.border}` }}>
+      {rows.map((r) => (
+        <div key={r.key} className="mb-2 last:mb-0">
+          <div className="text-[10px] uppercase tracking-wide mb-1.5" style={{ color: C.muted }}>
+            {r.label}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {players.map((p) => (
+              <button
+                key={p.id}
+                onClick={() => onChange({ ...pick, [r.key]: pick?.[r.key] === p.id ? null : p.id })}
+                className="px-3 py-1.5 rounded-full text-xs font-semibold"
+                style={{ background: pick?.[r.key] === p.id ? C.lime : C.surface2, color: pick?.[r.key] === p.id ? '#000' : C.muted }}
+              >
+                {p.name}
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function GameScoreboardCard({ settings, round, course, players, patchGameData, readOnly }) {
+  const game = GAME_LIBRARY.find((g) => g.id === round.gameId) || null;
+  const scoring = game?.scoring || 'quota';
+  const holes = roundHoles(round, course);
+  const activePlayers = players;
+
+  if (scoring === 'quota') {
+    const board = activePlayers
+      .map((p) => {
+        const res = playerResultInRound(settings, round, p, course);
+        const thru = holes.filter((h, i) => round.playerData[p.id]?.holeScores?.[i] != null).length;
+        return { p, res, thru };
+      })
+      .sort((a, b) => (b.res ? b.res.result : -999) - (a.res ? a.res.result : -999));
+    return (
+      <Card>
+        <div className="font-display text-lg mb-2" style={{ color: C.text }}>
+          {readOnly ? 'Final Standings' : 'Live Standings'}
+        </div>
+        {board.map(({ p, res, thru }, i) => (
+          <div key={p.id} className="flex items-center justify-between py-2" style={{ borderBottom: `1px solid ${C.border}` }}>
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="font-display text-xs w-4" style={{ color: i === 0 && res ? C.gold : C.faint }}>
+                {i + 1}
+              </span>
+              <span className="text-sm truncate" style={{ color: i === 0 && res ? C.text : C.muted, fontWeight: i === 0 && res ? 700 : 500 }}>
+                {p.name}
+              </span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="text-[10px]" style={{ color: C.faint }}>
+                {res ? `${res.points} pts · q${res.quota} · thru ${thru}` : 'no scores'}
+              </span>
+              <span className="font-display text-base w-10 text-right" style={{ color: res ? (res.result >= 0 ? C.lime : C.red) : C.faint }}>
+                {res ? (res.result >= 0 ? '+' : '') + res.result : '–'}
+              </span>
+            </div>
+          </div>
+        ))}
+      </Card>
+    );
+  }
+
+  if (scoring === 'stroke') {
+    const rows = strokePlayBoard(round, course, activePlayers);
+    return (
+      <Card>
+        <div className="font-display text-lg mb-2" style={{ color: C.text }}>
+          {game.name} — Total Strokes
+        </div>
+        {rows.map(({ p, total, thru }, i) => (
+          <BoardRow key={p.id} rank={i + 1} name={p.name} value={thru > 0 ? total : '–'} sub={`thru ${thru}`} />
+        ))}
+      </Card>
+    );
+  }
+
+  if (scoring === 'stableford') {
+    const rows = stablefordBoard(round, course, activePlayers);
+    return (
+      <Card>
+        <div className="font-display text-lg mb-2" style={{ color: C.text }}>
+          {game.name}
+        </div>
+        {rows.map(({ p, total, thru }, i) => (
+          <BoardRow key={p.id} rank={i + 1} name={p.name} value={thru > 0 ? total : '–'} sub={`thru ${thru}`} />
+        ))}
+      </Card>
+    );
+  }
+
+  if (scoring === 'match') {
+    if (activePlayers.length !== 2) {
+      return <EmptyNote text={`${game.name} needs exactly 2 players selected for this round.`} />;
+    }
+    const seg = matchSegment(round, course, activePlayers, 0, holes.length);
+    return (
+      <Card>
+        <div className="font-display text-lg mb-2" style={{ color: C.text }}>
+          {game.name}
+        </div>
+        <div className="flex items-center justify-between py-2">
+          <span className="font-display text-lg" style={{ color: seg.diff > 0 ? C.gold : C.text }}>
+            {seg.a.name}
+          </span>
+          <span className="font-display text-xs" style={{ color: C.muted }}>
+            {matchLabel(seg)}
+          </span>
+          <span className="font-display text-lg" style={{ color: seg.diff < 0 ? C.gold : C.text }}>
+            {seg.b.name}
+          </span>
+        </div>
+      </Card>
+    );
+  }
+
+  if (scoring === 'nassau') {
+    if (activePlayers.length !== 2) {
+      return <EmptyNote text="Nassau needs exactly 2 players selected for this round." />;
+    }
+    if (holes.length < 18) {
+      const seg = matchSegment(round, course, activePlayers, 0, holes.length);
+      return (
+        <Card>
+          <div className="font-display text-lg mb-2" style={{ color: C.text }}>
+            Nassau (single match — needs 18 holes for all 3 bets)
+          </div>
+          <div className="flex items-center justify-between py-2">
+            <span className="font-display text-base" style={{ color: seg.diff > 0 ? C.gold : C.text }}>
+              {seg.a.name}
+            </span>
+            <span className="font-display text-xs" style={{ color: C.muted }}>
+              {matchLabel(seg)}
+            </span>
+            <span className="font-display text-base" style={{ color: seg.diff < 0 ? C.gold : C.text }}>
+              {seg.b.name}
+            </span>
+          </div>
+        </Card>
+      );
+    }
+    const front = matchSegment(round, course, activePlayers, 0, 9);
+    const back = matchSegment(round, course, activePlayers, 9, 18);
+    const overall = matchSegment(round, course, activePlayers, 0, 18);
+    return (
+      <Card>
+        <div className="font-display text-lg mb-2" style={{ color: C.text }}>
+          Nassau
+        </div>
+        {[
+          ['Front 9', front],
+          ['Back 9', back],
+          ['Overall', overall],
+        ].map(([label, seg]) => (
+          <div key={label} className="py-2" style={{ borderBottom: `1px solid ${C.border}` }}>
+            <div className="text-[10px] uppercase tracking-wide mb-1" style={{ color: C.muted }}>
+              {label}
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="font-display text-sm" style={{ color: seg.diff > 0 ? C.gold : C.text }}>
+                {seg.a.name}
+              </span>
+              <span className="font-display text-xs" style={{ color: C.muted }}>
+                {matchLabel(seg)}
+              </span>
+              <span className="font-display text-sm" style={{ color: seg.diff < 0 ? C.gold : C.text }}>
+                {seg.b.name}
+              </span>
+            </div>
+          </div>
+        ))}
+      </Card>
+    );
+  }
+
+  if (scoring === 'nines') {
+    if (activePlayers.length !== 3) {
+      return <EmptyNote text="Nines needs exactly 3 players selected for this round." />;
+    }
+    const { pts, thru } = ninesBoard(round, course, activePlayers);
+    const rows = activePlayers.map((p) => ({ p, pts: pts[p.id] })).sort((a, b) => b.pts - a.pts);
+    return (
+      <Card>
+        <div className="font-display text-lg mb-2" style={{ color: C.text }}>
+          Nines (5-3-1)
+        </div>
+        {rows.map(({ p, pts: v }, i) => (
+          <BoardRow key={p.id} rank={i + 1} name={p.name} value={v} sub={`thru ${thru}`} />
+        ))}
+      </Card>
+    );
+  }
+
+  if (scoring === 'wolf') {
+    const { pts, thru } = wolfBoard(round, course, activePlayers);
+    const rows = activePlayers.map((p) => ({ p, pts: pts[p.id] })).sort((a, b) => b.pts - a.pts);
+    return (
+      <Card>
+        <div className="font-display text-lg mb-2" style={{ color: C.text }}>
+          Wolf
+        </div>
+        {rows.map(({ p, pts: v }, i) => (
+          <BoardRow key={p.id} rank={i + 1} name={p.name} value={v} sub={`thru ${thru}`} />
+        ))}
+      </Card>
+    );
+  }
+
+  if (scoring === 'bbb') {
+    const pts = bbbBoard(round, activePlayers);
+    const rows = activePlayers.map((p) => ({ p, pts: pts[p.id] })).sort((a, b) => b.pts - a.pts);
+    return (
+      <Card>
+        <div className="font-display text-lg mb-2" style={{ color: C.text }}>
+          Bingo Bango Bongo
+        </div>
+        {rows.map(({ p, pts: v }, i) => (
+          <BoardRow key={p.id} rank={i + 1} name={p.name} value={v} />
+        ))}
+      </Card>
+    );
+  }
+
+  if (scoring === 'skins') {
+    const skinsRound = { ...round, entryMode: 'holebyhole', skinsOptIn: activePlayers.map((p) => p.id) };
+    const skins = computeSkinsForRound(skinsRound, activePlayers, course, { ...settings, skinsBuyIn: settings.skinsBuyIn || 5 });
+    if (!skins) return <EmptyNote text="Skins needs at least 2 players and a skins buy-in above $0 (set in Settings)." />;
+    const rows = skins.players.map((p) => ({ p, count: skins.tally[p.id], pay: skins.payouts[p.id] })).sort((a, b) => b.count - a.count);
+    return (
+      <Card>
+        <div className="flex items-center justify-between mb-2">
+          <div className="font-display text-lg" style={{ color: C.text }}>
+            Skins
+          </div>
+          <StatTile label="Pot" value={`$${skins.pot}`} />
+        </div>
+        {rows.map(({ p, count, pay }) => (
+          <div key={p.id} className="flex items-center justify-between py-1.5" style={{ borderBottom: `1px solid ${C.border}` }}>
+            <span style={{ color: count > 0 ? C.text : C.muted, fontWeight: count > 0 ? 600 : 400 }}>{p.name}</span>
+            <span className="font-display text-sm" style={{ color: count > 0 ? C.gold : C.faint }}>
+              {count} skin{count === 1 ? '' : 's'} · ${pay.toFixed(2)}
+            </span>
+          </div>
+        ))}
+        {skins.carry > 0 && (
+          <div className="text-[11px] mt-2" style={{ color: C.orange }}>
+            {skins.carry} skin{skins.carry > 1 ? 's' : ''} still carrying (thru {skins.thru})
+          </div>
+        )}
+      </Card>
+    );
+  }
+
+  // manual tally — for formats without a dedicated automatic engine
+  const tally = round.gameData?.manualTally || {};
+  function bumpTally(playerId, delta) {
+    patchGameData(round.id, { manualTally: { ...tally, [playerId]: (tally[playerId] || 0) + delta } });
+  }
+  const rows = activePlayers.map((p) => ({ p, v: tally[p.id] || 0 })).sort((a, b) => b.v - a.v);
+  return (
+    <Card>
+      <div className="font-display text-lg mb-1" style={{ color: C.text }}>
+        {game ? `${game.name} — Manual Tally` : 'Manual Tally'}
+      </div>
+      {!readOnly && (
+        <p className="text-xs mb-2" style={{ color: C.muted }}>
+          No automatic engine for this format yet — tap +/− to track it by hand as you play. Check "Rules" above for how to score it.
+        </p>
+      )}
+      {rows.map(({ p, v }) => (
+        <div key={p.id} className="flex items-center justify-between py-1.5" style={{ borderBottom: `1px solid ${C.border}` }}>
+          <span className="text-sm" style={{ color: C.text }}>
+            {p.name}
+          </span>
+          {readOnly ? (
+            <span className="font-display text-base" style={{ color: C.text }}>
+              {v}
+            </span>
+          ) : (
+            <div className="flex items-center gap-3">
+              <button onClick={() => bumpTally(p.id, -1)} className="w-7 h-7 rounded-full flex items-center justify-center" style={{ background: C.surface2, color: C.text }}>
+                <Minus size={12} />
+              </button>
+              <span className="w-8 text-center font-display text-base" style={{ color: C.text }}>
+                {v}
+              </span>
+              <button onClick={() => bumpTally(p.id, 1)} className="w-7 h-7 rounded-full flex items-center justify-center" style={{ background: C.lime, color: '#000' }}>
+                <Plus size={12} />
+              </button>
+            </div>
+          )}
+        </div>
+      ))}
+    </Card>
+  );
+}
+
+function LiveScoring({ settings, round, players, course, patchRound, setHoleScore, patchGameData, onBackToSetup, onFinish }) {
   const holes = roundHoles(round, course);
   const activePlayers = roundPlayerList(round, players);
   const holeIdx = Math.min(round.currentHole || 0, holes.length - 1);
   const hole = holes[holeIdx];
   const net = round.pointsBasis === 'net';
+  const [showRules, setShowRules] = useState(false);
 
   // Default every player to par as soon as a hole is opened, so a par round takes zero taps.
   useEffect(() => {
@@ -891,13 +1925,9 @@ function LiveScoring({ settings, round, players, course, patchRound, setHoleScor
   }
 
   const allScoredThisHole = activePlayers.length > 0 && activePlayers.every((p) => round.playerData[p.id]?.holeScores?.[holeIdx] != null);
-  const board = activePlayers
-    .map((p) => {
-      const res = playerResultInRound(settings, round, p, course);
-      const thru = holes.filter((h, i) => round.playerData[p.id]?.holeScores?.[i] != null).length;
-      return { p, res, thru };
-    })
-    .sort((a, b) => (b.res ? b.res.result : -999) - (a.res ? a.res.result : -999));
+
+  const game = GAME_LIBRARY.find((g) => g.id === round.gameId) || null;
+  const showDogfightInfo = !game || game.scoring === 'quota';
 
   return (
     <div>
@@ -905,24 +1935,67 @@ function LiveScoring({ settings, round, players, course, patchRound, setHoleScor
         <button onClick={onBackToSetup} className="text-sm font-semibold" style={{ color: C.lime }}>
           ← Round setup
         </button>
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] uppercase" style={{ color: C.muted }}>
-            Points
+        {round.casual && (
+          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold" style={{ background: C.surface2, color: C.cyan, border: `1px solid ${C.cyan}` }}>
+            CASUAL · not counted
           </span>
-          <div className="flex rounded-full p-0.5" style={{ background: C.surface2 }}>
-            {['gross', 'net'].map((v) => (
-              <button
-                key={v}
-                onClick={() => patchRound(round.id, { pointsBasis: v })}
-                className="px-3 py-1 rounded-full text-[11px] font-bold uppercase"
-                style={{ background: (round.pointsBasis || 'gross') === v ? C.lime : 'transparent', color: (round.pointsBasis || 'gross') === v ? '#000' : C.muted }}
-              >
-                {v}
-              </button>
-            ))}
+        )}
+        {showDogfightInfo && (
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] uppercase" style={{ color: C.muted }}>
+              Points
+            </span>
+            <div className="flex rounded-full p-0.5" style={{ background: C.surface2 }}>
+              {['gross', 'net'].map((v) => (
+                <button
+                  key={v}
+                  onClick={() => patchRound(round.id, { pointsBasis: v })}
+                  className="px-3 py-1 rounded-full text-[11px] font-bold uppercase"
+                  style={{ background: (round.pointsBasis || 'gross') === v ? C.lime : 'transparent', color: (round.pointsBasis || 'gross') === v ? '#000' : C.muted }}
+                >
+                  {v}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
       </div>
+
+      {game && (
+        <div className="mb-3">
+          <button
+            onClick={() => setShowRules((v) => !v)}
+            className="w-full flex items-center justify-between rounded-2xl px-3 py-2.5"
+            style={{ background: '#12140A', border: `1.5px solid ${C.lime}` }}
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-lg">🎯</span>
+              <span className="font-display text-base truncate" style={{ color: C.text }}>
+                Playing: {game.name}
+              </span>
+            </div>
+            <span className="text-xs font-semibold shrink-0" style={{ color: C.lime }}>
+              {showRules ? 'Hide rules' : 'Rules'}
+            </span>
+          </button>
+          {showRules && (
+            <div className="rounded-2xl p-3 mt-1" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
+              <div className="text-[10px] uppercase tracking-wide mb-1" style={{ color: C.lime }}>
+                How to play
+              </div>
+              <p className="text-xs leading-relaxed mb-2" style={{ color: C.text }}>
+                {game.rules}
+              </p>
+              <div className="text-[10px] uppercase tracking-wide mb-1" style={{ color: C.gold }}>
+                The bet
+              </div>
+              <p className="text-xs leading-relaxed" style={{ color: C.muted }}>
+                {game.bet}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* hole strip */}
       <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
@@ -955,6 +2028,22 @@ function LiveScoring({ settings, round, players, course, patchRound, setHoleScor
         </div>
       </div>
 
+      {game?.scoring === 'wolf' && (
+        <WolfPicker
+          players={activePlayers}
+          holeIdx={holeIdx}
+          pick={round.gameData?.wolfPicks?.[holeIdx]}
+          onChange={(patch) => patchGameData(round.id, { wolfPicks: { ...(round.gameData?.wolfPicks || {}), [holeIdx]: patch } })}
+        />
+      )}
+      {game?.scoring === 'bbb' && (
+        <BBBPicker
+          players={activePlayers}
+          pick={round.gameData?.bbbPicks?.[holeIdx]}
+          onChange={(patch) => patchGameData(round.id, { bbbPicks: { ...(round.gameData?.bbbPicks || {}), [holeIdx]: patch } })}
+        />
+      )}
+
       {/* score rows */}
       {activePlayers.map((p) => {
         const strokes = strokesThisHole(round, p, course, holeIdx);
@@ -976,7 +2065,15 @@ function LiveScoring({ settings, round, players, course, patchRound, setHoleScor
                   )}
                 </div>
                 <div className="text-[10px] mt-0.5" style={{ color: C.faint }}>
-                  {pts != null ? `${pts} pt${pts === 1 ? '' : 's'} this hole${net && strokes > 0 ? ` (net ${eff})` : ''}` : strokes > 0 ? `Gets ${strokes} stroke${strokes > 1 ? 's' : ''} here` : 'No stroke this hole'}
+                  {showDogfightInfo
+                    ? pts != null
+                      ? `${pts} pt${pts === 1 ? '' : 's'} this hole${net && strokes > 0 ? ` (net ${eff})` : ''}`
+                      : strokes > 0
+                      ? `Gets ${strokes} stroke${strokes > 1 ? 's' : ''} here`
+                      : 'No stroke this hole'
+                    : strokes > 0
+                    ? `Gets ${strokes} stroke${strokes > 1 ? 's' : ''} here`
+                    : 'No stroke this hole'}
                 </div>
               </div>
               <div className="flex items-center gap-3 shrink-0">
@@ -1014,32 +2111,8 @@ function LiveScoring({ settings, round, players, course, patchRound, setHoleScor
         )}
       </div>
 
-      {/* live leaderboard */}
-      <Card>
-        <div className="font-display text-lg mb-2" style={{ color: C.text }}>
-          Live Standings
-        </div>
-        {board.map(({ p, res, thru }, i) => (
-          <div key={p.id} className="flex items-center justify-between py-2" style={{ borderBottom: `1px solid ${C.border}` }}>
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="font-display text-xs w-4" style={{ color: i === 0 && res ? C.gold : C.faint }}>
-                {i + 1}
-              </span>
-              <span className="text-sm truncate" style={{ color: i === 0 && res ? C.text : C.muted, fontWeight: i === 0 && res ? 700 : 500 }}>
-                {p.name}
-              </span>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <span className="text-[10px]" style={{ color: C.faint }}>
-                {res ? `${res.points} pts · q${res.quota} · thru ${thru}` : 'no scores'}
-              </span>
-              <span className="font-display text-base w-10 text-right" style={{ color: res ? (res.result >= 0 ? C.lime : C.red) : C.faint }}>
-                {res ? (res.result >= 0 ? '+' : '') + res.result : '–'}
-              </span>
-            </div>
-          </div>
-        ))}
-      </Card>
+      {/* live scoreboard, tailored to the selected game */}
+      <GameScoreboardCard settings={settings} round={round} course={course} players={activePlayers} patchGameData={patchGameData} />
 
       <GhostButton onClick={onFinish} style={{ width: '100%', textAlign: 'center', marginBottom: 24 }}>
         End live scoring
@@ -1048,8 +2121,240 @@ function LiveScoring({ settings, round, players, course, patchRound, setHoleScor
   );
 }
 
+// ---------- Round Summary (shown after Finish round) ----------
+function HoleByHoleRecap({ round, course, players }) {
+  const holes = roundHoles(round, course);
+  return (
+    <Card>
+      <div className="font-display text-lg mb-2" style={{ color: C.text }}>
+        Scorecard
+      </div>
+      <div style={{ overflowX: 'auto' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: `100px repeat(${holes.length}, 32px)`, minWidth: 100 + holes.length * 32 }}>
+          <div style={{ position: 'sticky', left: 0, background: C.surface }} className="text-[9px] uppercase py-1">
+            <span style={{ color: C.muted }}>Hole</span>
+          </div>
+          {holes.map((h, i) => (
+            <div key={i} className="text-[10px] text-center py-1 font-display" style={{ color: C.text }}>
+              {i + 1}
+            </div>
+          ))}
+          <div style={{ position: 'sticky', left: 0, background: C.surface }} className="text-[9px] py-1">
+            <span style={{ color: C.muted }}>Par</span>
+          </div>
+          {holes.map((h, i) => (
+            <div key={i} className="text-[10px] text-center py-1" style={{ color: C.muted }}>
+              {h.par}
+            </div>
+          ))}
+          <div style={{ position: 'sticky', left: 0, background: C.surface }} className="text-[9px] py-1 mb-1">
+            <span style={{ color: C.muted }}>SI</span>
+          </div>
+          {holes.map((h, i) => (
+            <div key={i} className="text-[10px] text-center py-1 mb-1" style={{ color: C.faint, borderBottom: `1px solid ${C.border}` }}>
+              {h.si}
+            </div>
+          ))}
+          {players.map((p) => (
+            <React.Fragment key={p.id}>
+              <div style={{ position: 'sticky', left: 0, background: C.surface }} className="text-[11px] py-1 truncate pr-1" title={p.name}>
+                <span style={{ color: C.text }}>{p.name}</span>
+              </div>
+              {holes.map((h, i) => {
+                const g = round.playerData[p.id]?.holeScores?.[i];
+                return (
+                  <div key={i} className="text-[11px] text-center py-1 font-display" style={{ color: scoreColor(g, h.par) }}>
+                    {g ?? '–'}
+                  </div>
+                );
+              })}
+            </React.Fragment>
+          ))}
+        </div>
+      </div>
+      <div className="text-[10px] mt-2" style={{ color: C.faint }}>
+        <span style={{ color: C.gold }}>●</span> eagle+ &nbsp; <span style={{ color: C.lime }}>●</span> birdie &nbsp; <span style={{ color: C.text }}>●</span> par &nbsp;{' '}
+        <span style={{ color: C.orange }}>●</span> bogey &nbsp; <span style={{ color: C.red }}>●</span> double+
+      </div>
+    </Card>
+  );
+}
+
+function RoundSummary({ round, course, players, courses, rounds, settings, onDone, onReopen }) {
+  const activePlayers = roundPlayerList(round, players);
+  const game = GAME_LIBRARY.find((g) => g.id === round.gameId) || null;
+  const holes = roundHoles(round, course);
+
+  const scoreRows = activePlayers
+    .map((p) => {
+      let total = 0,
+        thru = 0;
+      holes.forEach((h, i) => {
+        const g = round.playerData[p.id]?.holeScores?.[i];
+        if (g != null) {
+          total += g;
+          thru++;
+        }
+      });
+      return { p, total, thru, toPar: total - holes.slice(0, thru).reduce((s, h) => s + h.par, 0) };
+    })
+    .sort((a, b) => (a.thru === 0 ? 1 : b.thru === 0 ? -1 : a.total - b.total));
+
+  const purse = !round.casual ? purseForRound(settings, round, activePlayers, course) : null;
+  const skinsRound = round.entryMode === 'holebyhole' ? { ...round } : null;
+  const skins = skinsRound ? computeSkinsForRound(skinsRound, activePlayers, course, settings) : null;
+  const hasMoney = (purse && purse.scoredCount > 0) || (skins && skins.pot > 0);
+
+  let impact = null;
+  if (!round.casual) {
+    const leagueRounds = rounds.filter((r) => !r.casual);
+    const events = getEvents(leagueRounds);
+    const event = events.find((e) => e.roundIds.includes(round.id));
+    if (event) {
+      const { pointsMap, ranked } = computeEventRanking(settings, event, leagueRounds, courses, players);
+      const season = computeSeason(settings, leagueRounds, courses, players);
+      const leaderboard = [...players].sort((a, b) => (season.seasonTotals[b.id] || 0) - (season.seasonTotals[a.id] || 0));
+      impact = { pointsMap, ranked, season, leaderboard };
+    }
+  }
+
+  return (
+    <div>
+      <div className="text-center py-3">
+        <div className="font-display text-3xl leading-none" style={{ color: C.lime, textShadow: '0 0 14px rgba(180,255,57,0.4)' }}>
+          ROUND COMPLETE
+        </div>
+        <div className="text-xs mt-1" style={{ color: C.muted }}>
+          {round.date} · {course?.name} · {round.holes}-hole{round.casual ? ' · Casual' : ''}
+          {game ? ` · ${game.name}` : ''}
+        </div>
+      </div>
+
+      <GameScoreboardCard settings={settings} round={round} course={course} players={activePlayers} readOnly />
+
+      <Card>
+        <div className="font-display text-lg mb-2" style={{ color: C.text }}>
+          Total Score
+        </div>
+        {scoreRows.map(({ p, total, thru, toPar }, i) => (
+          <BoardRow
+            key={p.id}
+            rank={i + 1}
+            name={p.name}
+            value={thru > 0 ? total : '–'}
+            sub={thru > 0 ? `${toPar === 0 ? 'E' : toPar > 0 ? `+${toPar}` : toPar} · thru ${thru}` : 'no scores'}
+          />
+        ))}
+      </Card>
+
+      {round.entryMode === 'holebyhole' ? (
+        <HoleByHoleRecap round={round} course={course} players={activePlayers} />
+      ) : (
+        <EmptyNote text="This round was scored by total points, not hole-by-hole, so there's no scorecard to show." />
+      )}
+
+      {hasMoney && (
+        <Card>
+          <div className="font-display text-lg mb-2" style={{ color: C.text }}>
+            Money Won
+          </div>
+          {purse && purse.scoredCount > 0 && (
+            <div className="mb-3">
+              <div className="text-[10px] uppercase tracking-wide mb-1" style={{ color: C.muted }}>
+                Weekly purse — pot ${purse.pot} (${purse.rake} to season pool)
+              </div>
+              {purse.ranked.map((r, i) => {
+                const p = players.find((pp) => pp.id === r.id);
+                const pay = purse.payouts[r.id] || 0;
+                return <BoardRow key={r.id} rank={i + 1} name={p?.name || '?'} value={pay > 0 ? `$${pay}` : '—'} sub={`${r.result >= 0 ? '+' : ''}${r.result}`} />;
+              })}
+            </div>
+          )}
+          {skins && skins.pot > 0 && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wide mb-1" style={{ color: C.muted }}>
+                Skins — pot ${skins.pot}
+              </div>
+              {skins.players
+                .map((p) => ({ p, count: skins.tally[p.id], pay: skins.payouts[p.id] }))
+                .sort((a, b) => b.count - a.count)
+                .map(({ p, count, pay }) => (
+                  <div key={p.id} className="flex items-center justify-between py-1.5" style={{ borderBottom: `1px solid ${C.border}` }}>
+                    <span style={{ color: count > 0 ? C.text : C.muted, fontWeight: count > 0 ? 600 : 400 }}>{p.name}</span>
+                    <span className="font-display text-sm" style={{ color: count > 0 ? C.gold : C.faint }}>
+                      {count} skin{count === 1 ? '' : 's'} · ${pay.toFixed(2)}
+                    </span>
+                  </div>
+                ))}
+            </div>
+          )}
+        </Card>
+      )}
+
+      {impact && (
+        <Card>
+          <div className="font-display text-lg mb-1" style={{ color: C.text }}>
+            Dogfight League Impact
+          </div>
+          <p className="text-xs mb-2" style={{ color: C.muted }}>
+            Season points earned this round, and each player's updated season standing.
+          </p>
+          {impact.ranked.map((x, i) => {
+            const p = players.find((pp) => pp.id === x.id);
+            const earned = impact.pointsMap[x.id];
+            const total = impact.season.seasonTotals[x.id];
+            const rank = impact.leaderboard.findIndex((pp) => pp.id === x.id) + 1;
+            return (
+              <div key={x.id} className="flex items-center justify-between py-2" style={{ borderBottom: `1px solid ${C.border}` }}>
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="font-display text-xs w-4" style={{ color: i === 0 ? C.gold : C.faint }}>
+                    {i + 1}
+                  </span>
+                  <span className="text-sm truncate" style={{ color: C.text }}>
+                    {p?.name || '?'}
+                  </span>
+                </div>
+                <div className="text-right shrink-0">
+                  <div className="font-display text-sm" style={{ color: C.lime }}>
+                    +{earned} pts
+                  </div>
+                  <div className="text-[10px]" style={{ color: C.faint }}>
+                    {total} total · #{rank} of {players.length}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </Card>
+      )}
+
+      <PrimaryButton onClick={onDone} style={{ width: '100%', textAlign: 'center', marginBottom: 8 }}>
+        Done
+      </PrimaryButton>
+      <GhostButton onClick={onReopen} style={{ width: '100%', textAlign: 'center', marginBottom: 24 }}>
+        Reopen this round
+      </GhostButton>
+    </div>
+  );
+}
+
 // ---------- Rounds & Scores tab ----------
 function RoundsTab({ settings, players, courses, rounds, setRounds, editingRoundId, setEditingRoundId }) {
+  const [showCasual, setShowCasual] = useState(false);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedRoundIds, setSelectedRoundIds] = useState([]);
+  function toggleSelectRound(id) {
+    setSelectedRoundIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
+  }
+  const [confirmDeleteIds, setConfirmDeleteIds] = useState(null);
+  function performDelete() {
+    if (!confirmDeleteIds || confirmDeleteIds.length === 0) return;
+    deleteRounds(confirmDeleteIds);
+    if (confirmDeleteIds.includes(editingRoundId)) setEditingRoundId(null);
+    setSelectedRoundIds((ids) => ids.filter((id) => !confirmDeleteIds.includes(id)));
+    setSelectMode(false);
+    setConfirmDeleteIds(null);
+  }
   function newRound() {
     const course = courses[0];
     const r = {
@@ -1066,13 +2371,14 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
       status: 'setup',
       currentHole: 0,
       pointsBasis: 'gross',
+      gameId: null,
+      gameData: {},
     };
     setRounds((rs) => [r, ...rs]);
     setEditingRoundId(r.id);
   }
-  function deleteRound(id) {
-    setRounds((rs) => rs.filter((r) => r.id !== id).map((r) => (r.combinedWith === id ? { ...r, combinedWith: null } : r)));
-    setEditingRoundId(null);
+  function deleteRounds(ids) {
+    setRounds((rs) => rs.filter((r) => !ids.includes(r.id)).map((r) => (ids.includes(r.combinedWith) ? { ...r, combinedWith: null } : r)));
   }
   function patchRound(id, patch) {
     setRounds((rs) => rs.map((r) => (r.id === id ? { ...r, ...patch } : r)));
@@ -1122,6 +2428,9 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
       })
     );
   }
+  function patchGameData(roundId, patch) {
+    setRounds((rs) => rs.map((r) => (r.id === roundId ? { ...r, gameData: { ...(r.gameData || {}), ...patch } } : r)));
+  }
 
   const editing = rounds.find((r) => r.id === editingRoundId);
 
@@ -1135,11 +2444,27 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
         course={course}
         patchRound={patchRound}
         setHoleScore={setHoleScore}
+        patchGameData={patchGameData}
         onBackToSetup={() => patchRound(editing.id, { status: 'setup' })}
         onFinish={() => {
           patchRound(editing.id, { status: 'final' });
-          setEditingRoundId(null);
         }}
+      />
+    );
+  }
+
+  if (editing && editing.status === 'final') {
+    const course = courses.find((c) => c.id === editing.courseId) || courses[0];
+    return (
+      <RoundSummary
+        round={editing}
+        course={course}
+        players={players}
+        courses={courses}
+        rounds={rounds}
+        settings={settings}
+        onDone={() => setEditingRoundId(null)}
+        onReopen={() => patchRound(editing.id, { status: 'live' })}
       />
     );
   }
@@ -1158,6 +2483,12 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
         <button onClick={() => setEditingRoundId(null)} className="text-sm font-semibold mb-3" style={{ color: C.lime }}>
           ← Rounds
         </button>
+
+        {editing.casual && (
+          <InfoNote>
+            <b style={{ color: C.cyan }}>Casual round</b> — from Game Finder. Scoring and skins work the same, but this round is excluded from the Dogfight League season standings, purse, and money-in-play.
+          </InfoNote>
+        )}
 
         <Card>
           <div className="grid grid-cols-2 gap-2 mb-2">
@@ -1416,58 +2747,171 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
           </div>
         )}
 
-        <GhostButton onClick={() => deleteRound(editing.id)} color={C.red} style={{ width: '100%', textAlign: 'center', marginBottom: 24 }}>
+        <GhostButton onClick={() => setConfirmDeleteIds([editing.id])} color={C.red} style={{ width: '100%', textAlign: 'center', marginBottom: 24 }}>
           Delete round
         </GhostButton>
+
+        {confirmDeleteIds && (
+          <ConfirmDialog
+            title="Delete this round?"
+            message="This will permanently remove the round, its scores, and any skins or purse results tied to it. This can't be undone."
+            onCancel={() => setConfirmDeleteIds(null)}
+            onConfirm={performDelete}
+          />
+        )}
       </div>
     );
   }
 
+  const casualCount = rounds.filter((r) => r.casual).length;
+  const visibleRounds = showCasual ? rounds : rounds.filter((r) => !r.casual);
+
+  function confirmDeleteSelected() {
+    if (selectedRoundIds.length === 0) return;
+    setConfirmDeleteIds(selectedRoundIds);
+  }
+
   return (
-    <div>
-      <PrimaryButton onClick={newRound} style={{ width: '100%', marginBottom: 16 }}>
-        + New Round
-      </PrimaryButton>
-      {rounds.map((r) => {
+    <div style={{ paddingBottom: selectMode ? 88 : 0 }}>
+      {selectMode ? (
+        <div className="flex items-center justify-between gap-2 mb-4">
+          <button
+            onClick={() => setSelectedRoundIds(selectedRoundIds.length === visibleRounds.length ? [] : visibleRounds.map((r) => r.id))}
+            className="text-xs font-semibold shrink-0"
+            style={{ color: C.lime }}
+          >
+            {selectedRoundIds.length === visibleRounds.length && visibleRounds.length > 0 ? 'Deselect all' : 'Select all'}
+          </button>
+          <span className="text-xs shrink-0" style={{ color: C.muted }}>
+            {selectedRoundIds.length} selected
+          </span>
+          <button
+            onClick={() => {
+              setSelectMode(false);
+              setSelectedRoundIds([]);
+            }}
+            className="text-xs font-semibold shrink-0"
+            style={{ color: C.muted }}
+          >
+            Cancel
+          </button>
+        </div>
+      ) : (
+        <PrimaryButton onClick={newRound} style={{ width: '100%', marginBottom: 12 }}>
+          + New Round
+        </PrimaryButton>
+      )}
+
+      {!selectMode && rounds.length > 0 && (
+        <div className="flex items-center justify-between mb-3">
+          {casualCount > 0 ? (
+            <button onClick={() => setShowCasual((v) => !v)} className="text-xs font-semibold" style={{ color: C.cyan }}>
+              {showCasual ? 'Hide' : 'Show'} casual rounds ({casualCount})
+            </button>
+          ) : (
+            <span />
+          )}
+          <button onClick={() => setSelectMode(true)} className="text-xs font-semibold" style={{ color: C.muted }}>
+            Select
+          </button>
+        </div>
+      )}
+
+      {visibleRounds.map((r) => {
         const course = courses.find((c) => c.id === r.courseId);
         const roundPlayers = roundPlayerList(r, players);
         const scored = course ? roundPlayers.filter((p) => playerPointsInRound(r, p, course) != null).length : 0;
+        const selected = selectedRoundIds.includes(r.id);
         return (
-          <button key={r.id} onClick={() => setEditingRoundId(r.id)} className="w-full text-left rounded-3xl p-4 mb-3" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="font-display text-lg" style={{ color: C.text }}>
-                  {r.date}
+          <button
+            key={r.id}
+            onClick={() => (selectMode ? toggleSelectRound(r.id) : setEditingRoundId(r.id))}
+            className="w-full text-left rounded-3xl p-4 mb-3 flex items-center gap-3"
+            style={{ background: C.surface, border: `1px solid ${selectMode && selected ? C.lime : C.border}` }}
+          >
+            {selectMode && (
+              <span
+                className="w-5 h-5 rounded shrink-0"
+                style={{ background: selected ? C.lime : 'transparent', border: `1.5px solid ${selected ? C.lime : C.faint}` }}
+              />
+            )}
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center justify-between">
+                <div className="min-w-0">
+                  <div className="font-display text-lg truncate" style={{ color: C.text }}>
+                    {roundGameLabel(r)}
+                  </div>
+                  <div className="text-xs truncate" style={{ color: C.muted }}>
+                    {roundNamesLabel(roundPlayers)} · {formatRoundDate(r.date)}
+                  </div>
                 </div>
-                <div className="text-xs" style={{ color: C.muted }}>
-                  {r.holes}-hole · {course ? course.name : 'Unknown course'}
-                </div>
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                {r.status === 'live' && (
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold" style={{ background: C.red, color: '#fff' }}>
-                    ● LIVE
-                  </span>
-                )}
-                <div className="text-xs font-display" style={{ color: C.gold }}>
-                  {scored}/{roundPlayers.length} scored
+                <div className="flex items-center gap-2 shrink-0">
+                  {r.casual && (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold" style={{ background: C.surface2, color: C.cyan, border: `1px solid ${C.cyan}` }}>
+                      CASUAL
+                    </span>
+                  )}
+                  {r.status === 'live' && (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold" style={{ background: C.red, color: '#fff' }}>
+                      ● LIVE
+                    </span>
+                  )}
+                  {r.status === 'final' && (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold" style={{ background: 'rgba(180,255,57,0.15)', color: C.lime, border: `1px solid ${C.lime}` }}>
+                      ✓ COMPLETE
+                    </span>
+                  )}
+                  {(!r.status || r.status === 'setup') && (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold" style={{ background: C.surface2, color: C.muted, border: `1px solid ${C.border}` }}>
+                      NOT STARTED
+                    </span>
+                  )}
+                  <div className="text-xs font-display" style={{ color: C.gold }}>
+                    {scored}/{roundPlayers.length} scored
+                  </div>
                 </div>
               </div>
             </div>
           </button>
         );
       })}
-      {rounds.length === 0 && (
+      {visibleRounds.length === 0 && rounds.length === 0 && (
         <div className="text-sm text-center py-6" style={{ color: C.muted }}>
           No rounds yet — create one above.
         </div>
+      )}
+      {visibleRounds.length === 0 && rounds.length > 0 && (
+        <div className="text-sm text-center py-6" style={{ color: C.muted }}>
+          All rounds so far are casual — tap "Show casual rounds" above to see them.
+        </div>
+      )}
+
+      {selectMode && (
+        <div className="fixed bottom-4 left-0 right-0 px-4" style={{ maxWidth: 480, margin: '0 auto' }}>
+          <PrimaryButton
+            onClick={confirmDeleteSelected}
+            disabled={selectedRoundIds.length === 0}
+            style={{ width: '100%', textAlign: 'center', background: selectedRoundIds.length > 0 ? C.red : C.surface2, color: selectedRoundIds.length > 0 ? '#fff' : C.faint }}
+          >
+            Delete {selectedRoundIds.length || ''} round{selectedRoundIds.length === 1 ? '' : 's'}
+          </PrimaryButton>
+        </div>
+      )}
+
+      {confirmDeleteIds && (
+        <ConfirmDialog
+          title={`Delete ${confirmDeleteIds.length} round${confirmDeleteIds.length === 1 ? '' : 's'}?`}
+          message="This will permanently remove the selected round(s), their scores, and any skins or purse results tied to them. This can't be undone."
+          onCancel={() => setConfirmDeleteIds(null)}
+          onConfirm={performDelete}
+        />
       )}
     </div>
   );
 }
 
 // ---------- Settings tab ----------
-function SettingsTab({ settings, setSettings, players, setPlayers, courses, rounds, setRounds }) {
+function SettingsTab({ settings, setSettings, players, setPlayers, courses, rounds, setRounds, availability, setAvailability }) {
   const fileInputRef = useRef(null);
   function patch(p) {
     setSettings((s) => ({ ...s, ...p }));
@@ -1490,7 +2934,7 @@ function SettingsTab({ settings, setSettings, players, setPlayers, courses, roun
     setRounds([sampleRound]);
   }
   function exportBackup() {
-    const data = { settings, players, courses, rounds };
+    const data = { settings, players, courses, rounds, availability };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -1509,6 +2953,7 @@ function SettingsTab({ settings, setSettings, players, setPlayers, courses, roun
         if (data.settings) setSettings(data.settings);
         if (data.players) setPlayers(data.players);
         if (data.rounds) setRounds(data.rounds);
+        if (data.availability) setAvailability(data.availability);
       } catch (err) {
         alert('Could not read that backup file.');
       }
@@ -1516,11 +2961,13 @@ function SettingsTab({ settings, setSettings, players, setPlayers, courses, roun
     reader.readAsText(file);
     e.target.value = '';
   }
+  const [confirmErase, setConfirmErase] = useState(false);
   function eraseEverything() {
-    if (!window.confirm('Erase all league data? This cannot be undone.')) return;
     setSettings(DEFAULT_SETTINGS);
     setPlayers([]);
     setRounds([]);
+    setAvailability({});
+    setConfirmErase(false);
   }
 
   return (
@@ -1649,13 +3096,23 @@ function SettingsTab({ settings, setSettings, players, setPlayers, courses, roun
         </div>
         <div className="grid grid-cols-2 gap-2">
           <GhostButton onClick={() => fileInputRef.current?.click()}>Import backup</GhostButton>
-          <GhostButton onClick={eraseEverything} color={C.red}>
+          <GhostButton onClick={() => setConfirmErase(true)} color={C.red}>
             Erase everything
           </GhostButton>
         </div>
         <input ref={fileInputRef} type="file" accept="application/json" onChange={importBackup} style={{ display: 'none' }} />
         <InfoNote>All data is saved in this browser only. Use Export to keep a backup or move it to another device. Bookmark this page to find it again.</InfoNote>
       </Card>
+
+      {confirmErase && (
+        <ConfirmDialog
+          title="Erase everything?"
+          message="This wipes all players, courses, rounds, and settings back to defaults. This can't be undone — export a backup first if you want to keep this data."
+          confirmLabel="Erase"
+          onCancel={() => setConfirmErase(false)}
+          onConfirm={eraseEverything}
+        />
+      )}
     </div>
   );
 }
@@ -1764,6 +3221,7 @@ function DogfightLeague() {
   const [players, setPlayers] = useState(makeDefaultPlayers);
   const [courses] = useState([DEFAULT_COURSE]);
   const [rounds, setRounds] = useState([]);
+  const [availability, setAvailability] = useState({});
   const [editingRoundId, setEditingRoundId] = useState(null);
   const saveTimer = useRef(null);
 
@@ -1776,6 +3234,7 @@ function DogfightLeague() {
           if (data.settings) setSettings({ ...DEFAULT_SETTINGS, ...data.settings });
           if (data.players) setPlayers(data.players);
           if (data.rounds) setRounds(data.rounds);
+          if (data.availability) setAvailability(data.availability);
         }
       } catch (e) {}
       setLoading(false);
@@ -1787,11 +3246,11 @@ function DogfightLeague() {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
       try {
-        await window.storage.set(STORAGE_KEY, JSON.stringify({ settings, players, rounds }));
+        await window.storage.set(STORAGE_KEY, JSON.stringify({ settings, players, rounds, availability }));
       } catch (e) {}
     }, 500);
     return () => clearTimeout(saveTimer.current);
-  }, [settings, players, rounds, loading]);
+  }, [settings, players, rounds, availability, loading]);
 
   if (loading) {
     return (
@@ -1850,8 +3309,24 @@ function DogfightLeague() {
             <RoundsTab settings={settings} players={players} courses={courses} rounds={rounds} setRounds={setRounds} editingRoundId={editingRoundId} setEditingRoundId={setEditingRoundId} />
           )}
           {activeTab === 'skins' && <SkinsTab settings={settings} players={players} rounds={rounds} courses={courses} />}
+          {activeTab === 'calendar' && <CalendarTab players={players} availability={availability} setAvailability={setAvailability} />}
+          {activeTab === 'gamefinder' && (
+            <GameFinderTab players={players} courses={courses} setRounds={setRounds} setEditingRoundId={setEditingRoundId} setActiveTab={setActiveTab} />
+          )}
           {activeTab === 'players' && <PlayersTab settings={settings} players={players} setPlayers={setPlayers} />}
-          {activeTab === 'settings' && <SettingsTab settings={settings} setSettings={setSettings} players={players} setPlayers={setPlayers} courses={courses} rounds={rounds} setRounds={setRounds} />}
+          {activeTab === 'settings' && (
+            <SettingsTab
+              settings={settings}
+              setSettings={setSettings}
+              players={players}
+              setPlayers={setPlayers}
+              courses={courses}
+              rounds={rounds}
+              setRounds={setRounds}
+              availability={availability}
+              setAvailability={setAvailability}
+            />
+          )}
           {activeTab === 'howitworks' && <HowItWorksTab settings={settings} />}
         </div>
       </div>
