@@ -858,6 +858,37 @@ function ConfirmDialog({ title, message, confirmLabel = 'Delete', onConfirm, onC
   );
 }
 
+function AiStatusCard({ aiStatus, aiErrorMsg }) {
+  const isReady = aiStatus === 'ready';
+  const isChecking = aiStatus === 'checking';
+  const isUnavailable = aiStatus === 'unavailable';
+  return (
+    <Card>
+      <div className="flex items-center justify-between mb-1">
+        <div className="font-display text-xl" style={{ color: C.text }}>
+          AI Assistant
+        </div>
+        <span
+          className="px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0"
+          style={{
+            background: isReady ? 'rgba(180,255,57,0.15)' : C.surface2,
+            color: isReady ? C.lime : aiStatus === 'error' ? C.red : C.muted,
+            border: `1px solid ${isReady ? C.lime : aiStatus === 'error' ? C.red : C.border}`,
+          }}
+        >
+          {isReady ? '🟢 READY' : isChecking ? 'CHECKING…' : aiStatus === 'error' ? 'ERROR' : 'UNAVAILABLE HERE'}
+        </span>
+      </div>
+      <p className="text-xs" style={{ color: C.muted }}>
+        {isReady && "Gemini is connected — Balanced Teams and Season Awards are ready to use."}
+        {isChecking && 'Checking for a connection…'}
+        {isUnavailable && "Can't reach the Gemini SDK in this environment. Works in the hosted/Vercel app, not this in-chat preview."}
+      </p>
+      {aiStatus === 'error' && <InfoNote>Gemini error: {aiErrorMsg || 'unknown error initializing the AI SDK.'}</InfoNote>}
+    </Card>
+  );
+}
+
 function CloudSyncCard({ cloudStatus, cloudError, cloudLeagueId }) {
   const [leagueIdInput, setLeagueIdInput] = useState('Dogfight League');
   const [useCustom, setUseCustom] = useState(false);
@@ -3391,7 +3422,7 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
 }
 
 // ---------- Settings tab ----------
-function SettingsTab({ settings, setSettings, players, setPlayers, courses, rounds, setRounds, availability, setAvailability, cloudStatus, cloudError, cloudLeagueId }) {
+function SettingsTab({ settings, setSettings, players, setPlayers, courses, rounds, setRounds, availability, setAvailability, cloudStatus, cloudError, cloudLeagueId, aiStatus, aiErrorMsg }) {
   const fileInputRef = useRef(null);
   function patch(p) {
     setSettings((s) => ({ ...s, ...p }));
@@ -3453,6 +3484,7 @@ function SettingsTab({ settings, setSettings, players, setPlayers, courses, roun
   return (
     <div>
       <CloudSyncCard cloudStatus={cloudStatus} cloudError={cloudError} cloudLeagueId={cloudLeagueId} />
+      <AiStatusCard aiStatus={aiStatus} aiErrorMsg={aiErrorMsg} />
 
       <Card>
         <div className="font-display text-xl mb-3" style={{ color: C.text }}>
@@ -3717,6 +3749,35 @@ function DogfightLeague() {
   const dbRef = useRef(null);
   const lastSyncedRef = useRef({ players: {}, rounds: {}, availability: {}, settingsJSON: null });
   const unsubsRef = useRef([]);
+
+  const [aiStatus, setAiStatus] = useState('checking'); // checking | ready | error | unavailable
+  const [aiErrorMsg, setAiErrorMsg] = useState('');
+
+  useEffect(() => {
+    let tries = 0;
+    const iv = setInterval(() => {
+      tries++;
+      if (typeof window === 'undefined' || typeof window.dflAI === 'undefined') {
+        if (tries > 20) {
+          setAiStatus('unavailable');
+          clearInterval(iv);
+        }
+        return;
+      }
+      if (window.dflAI.ready) {
+        setAiStatus('ready');
+        clearInterval(iv);
+      } else if (window.dflAI.error) {
+        setAiStatus('error');
+        setAiErrorMsg(window.dflAI.error);
+        clearInterval(iv);
+      } else if (tries > 20) {
+        setAiStatus('unavailable');
+        clearInterval(iv);
+      }
+    }, 250);
+    return () => clearInterval(iv);
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -4024,6 +4085,8 @@ function DogfightLeague() {
               cloudStatus={cloudStatus}
               cloudError={cloudError}
               cloudLeagueId={cloudLeagueId}
+              aiStatus={aiStatus}
+              aiErrorMsg={aiErrorMsg}
             />
           )}
           {activeTab === 'howitworks' && <HowItWorksTab settings={settings} />}
