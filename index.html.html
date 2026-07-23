@@ -8,6 +8,8 @@
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
 <style>
   html, body { background:#000000; margin:0; padding:0; }
   #root { min-height:100vh; }
@@ -74,6 +76,38 @@ const C = {
   orange: '#FF9F0A',
 };
 const STORAGE_KEY = 'dogfight-league';
+const CLOUD_CONFIG_KEY = 'dfl:cloud-config';
+
+const DEFAULT_FIREBASE_CONFIG = {
+  apiKey: 'AIzaSyCEUwoGcIFsioaYXplXiR-w8NC5mJzRNCI',
+  authDomain: 'golf-book-bc3b2.firebaseapp.com',
+  projectId: 'golf-book-bc3b2',
+  storageBucket: 'golf-book-bc3b2.firebasestorage.app',
+  messagingSenderId: '336792673125',
+  appId: '1:336792673125:web:e94c56a971b4da5b8fdf8c',
+  measurementId: 'G-R3Y37SYT02',
+};
+function fbAvailable() {
+  return typeof window !== 'undefined' && !!window.firebase;
+}
+function loadCloudConfig() {
+  try {
+    const raw = localStorage.getItem(CLOUD_CONFIG_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+}
+function saveCloudConfig(cfg) {
+  try {
+    localStorage.setItem(CLOUD_CONFIG_KEY, JSON.stringify(cfg));
+  } catch (e) {}
+}
+function clearCloudConfig() {
+  try {
+    localStorage.removeItem(CLOUD_CONFIG_KEY);
+  } catch (e) {}
+}
 
 // ---------- default course (Pine Tree Golf & Country Club, Birmingham AL) ----------
 const PT_PAR = [5, 3, 4, 4, 4, 5, 3, 4, 4, 4, 3, 4, 5, 4, 5, 3, 4, 4];
@@ -581,7 +615,7 @@ function StatTile({ label, value, sub, accent }) {
       <div className="text-[10px] uppercase tracking-wide" style={{ color: C.muted }}>
         {label}
       </div>
-      <div className="font-display text-2xl mt-0.5" style={{ color: accent ? C.gold : C.text }}>
+      <div key={value} className="font-display text-2xl mt-0.5 pop-in" style={{ color: accent ? C.gold : C.text }}>
         {value}
       </div>
       {sub && (
@@ -643,13 +677,13 @@ function NumStepper({ value, onChange, step = 1, min, max, decimals = 0 }) {
   };
   return (
     <div className="flex items-center gap-2">
-      <button onClick={() => onChange(clamp(value - step))} className="w-7 h-7 rounded-full flex items-center justify-center shrink-0" style={{ background: C.surface2, color: C.text }}>
+      <button onClick={() => onChange(clamp(value - step))} className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 tap" style={{ background: C.surface2, color: C.text }}>
         <Minus size={12} />
       </button>
-      <span className="w-10 text-center font-display text-sm" style={{ color: C.text }}>
+      <span key={value} className="w-10 text-center font-display text-sm inline-block pop-in" style={{ color: C.text }}>
         {decimals ? value.toFixed(decimals) : value}
       </span>
-      <button onClick={() => onChange(clamp(value + step))} className="w-7 h-7 rounded-full flex items-center justify-center shrink-0" style={{ background: C.surface2, color: C.text }}>
+      <button onClick={() => onChange(clamp(value + step))} className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 tap" style={{ background: C.surface2, color: C.text }}>
         <Plus size={12} />
       </button>
     </div>
@@ -663,7 +697,7 @@ function Toggle2({ value, options, onChange }) {
           key={o.value}
           onClick={() => onChange(o.value)}
           className="flex-1 py-2 rounded-full text-xs font-bold"
-          style={{ background: value === o.value ? C.lime : 'transparent', color: value === o.value ? '#000' : C.muted }}
+          style={{ background: value === o.value ? C.lime : 'transparent', color: value === o.value ? '#000' : C.muted, transition: 'background-color 0.2s ease, color 0.2s ease' }}
         >
           {o.label}
         </button>
@@ -701,9 +735,17 @@ function InfoNote({ children }) {
     </div>
   );
 }
-function BoardRow({ rank, name, value, sub }) {
+function Collapse({ open, children }) {
   return (
-    <div className="flex items-center justify-between py-2" style={{ borderBottom: `1px solid ${C.border}` }}>
+    <div className={`collapse-grid ${open ? 'open' : ''}`}>
+      <div className="collapse-inner">{children}</div>
+    </div>
+  );
+}
+function BoardRow({ rank, name, value, sub }) {
+  const delay = typeof rank === 'number' ? Math.min(rank - 1, 12) * 0.04 : 0;
+  return (
+    <div className="flex items-center justify-between py-2 row-in" style={{ borderBottom: `1px solid ${C.border}`, animationDelay: `${delay}s` }}>
       <div className="flex items-center gap-2 min-w-0">
         <span className="font-display text-xs w-4" style={{ color: rank === 1 ? C.gold : C.faint }}>
           {rank}
@@ -718,7 +760,7 @@ function BoardRow({ rank, name, value, sub }) {
             {sub}
           </span>
         )}
-        <span className="font-display text-base" style={{ color: rank === 1 ? C.gold : C.text }}>
+        <span className="font-display text-base" style={{ color: rank === 1 ? C.gold : C.text, textShadow: rank === 1 ? '0 0 10px rgba(255,214,10,0.45)' : 'none' }}>
           {value}
         </span>
       </div>
@@ -737,13 +779,13 @@ function EmptyNote({ text }) {
 function ConfirmDialog({ title, message, confirmLabel = 'Delete', onConfirm, onCancel }) {
   return (
     <div
-      className="fixed inset-0 flex items-center justify-center p-4"
+      className="fixed inset-0 flex items-center justify-center p-4 backdrop-fade"
       style={{ background: 'rgba(0,0,0,0.75)', zIndex: 100 }}
       onClick={onCancel}
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-full rounded-3xl p-5"
+        className="w-full rounded-3xl p-5 modal-pop"
         style={{ maxWidth: 380, background: C.surface, border: `1.5px solid ${C.red}` }}
       >
         <div className="font-display text-xl mb-2" style={{ color: C.text }}>
@@ -762,6 +804,163 @@ function ConfirmDialog({ title, message, confirmLabel = 'Delete', onConfirm, onC
         </div>
       </div>
     </div>
+  );
+}
+
+function CloudSyncCard({ cloudStatus, cloudError, cloudLeagueId }) {
+  const [leagueIdInput, setLeagueIdInput] = useState('Dogfight League');
+  const [useCustom, setUseCustom] = useState(false);
+  const [configText, setConfigText] = useState('');
+  const [localErr, setLocalErr] = useState('');
+  const [copied, setCopied] = useState(false);
+
+  const isConnected = cloudStatus === 'connected';
+  const isUnavailable = cloudStatus === 'unavailable';
+  const isConnecting = cloudStatus === 'connecting';
+
+  function connect() {
+    setLocalErr('');
+    if (!leagueIdInput.trim()) return;
+    let cfg = DEFAULT_FIREBASE_CONFIG;
+    if (useCustom) {
+      if (!configText.trim()) return;
+      try {
+        cfg = new Function('return (' + configText + ')')();
+      } catch (e) {
+        setLocalErr("Couldn't read that — paste the exact firebaseConfig object from the Firebase console, curly braces and all.");
+        return;
+      }
+      if (!cfg || !cfg.apiKey || !cfg.projectId) {
+        setLocalErr("That doesn't look like a complete Firebase config — it should have apiKey, projectId, etc.");
+        return;
+      }
+    }
+    const cleanLeagueId = leagueIdInput.trim().replace(/[\s/]+/g, '-').toLowerCase();
+    saveCloudConfig({ ...cfg, leagueId: cleanLeagueId });
+    window.location.reload();
+  }
+  function disconnect() {
+    clearCloudConfig();
+    window.location.reload();
+  }
+  function copyLeagueId() {
+    try {
+      navigator.clipboard.writeText(cloudLeagueId);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch (e) {}
+  }
+
+  const rulesText = `rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /leagues/{leagueId}/{document=**} {
+      allow read, write: if true;
+    }
+  }
+}`;
+
+  return (
+    <Card>
+      <div className="flex items-center justify-between mb-2">
+        <div className="font-display text-xl" style={{ color: C.text }}>
+          Cloud Sync
+        </div>
+        <span
+          className="px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0"
+          style={{
+            background: isConnected ? 'rgba(180,255,57,0.15)' : C.surface2,
+            color: isConnected ? C.lime : cloudStatus === 'error' ? C.red : C.muted,
+            border: `1px solid ${isConnected ? C.lime : cloudStatus === 'error' ? C.red : C.border}`,
+          }}
+        >
+          {isConnected ? '🟢 LIVE' : isConnecting ? 'CONNECTING…' : cloudStatus === 'error' ? 'ERROR' : isUnavailable ? 'UNAVAILABLE HERE' : 'LOCAL ONLY'}
+        </span>
+      </div>
+
+      {isUnavailable && (
+        <InfoNote>
+          Cloud sync can't run in this in-chat preview (the sandbox won't load the Firebase SDK). It works in the downloadable app and your hosted Vercel link.
+        </InfoNote>
+      )}
+      {cloudStatus === 'error' && <InfoNote>Connection error: {cloudError || 'something went wrong reaching Firestore.'}</InfoNote>}
+
+      {isConnected ? (
+        <>
+          <p className="text-sm mb-1" style={{ color: C.muted }}>
+            Everyone using League ID <b style={{ color: C.text }}>{cloudLeagueId}</b> shares this data live — scores, the calendar, live scoring, all of it.
+          </p>
+          <button onClick={copyLeagueId} className="text-xs font-semibold mb-3" style={{ color: C.lime }}>
+            {copied ? '✓ Copied' : 'Copy League ID to share'}
+          </button>
+          <GhostButton onClick={disconnect} color={C.red} style={{ width: '100%', textAlign: 'center' }}>
+            Disconnect (go local-only)
+          </GhostButton>
+        </>
+      ) : (
+        !isUnavailable && (
+          <>
+            <p className="text-sm mb-3" style={{ color: C.muted }}>
+              This app is already connected to a Firebase project. Pick a League ID your whole group will use — everyone who enters the same one shares data live.
+            </p>
+            <TextField label="League ID (share this with your group)" value={leagueIdInput} onChange={setLeagueIdInput} placeholder="e.g. birmingham-dogfight" />
+
+            <button onClick={() => setUseCustom((v) => !v)} className="text-xs font-semibold mt-3 mb-1" style={{ color: C.muted }}>
+              {useCustom ? '← Use the built-in project instead' : 'Use a different Firebase project instead'}
+            </button>
+            <Collapse open={useCustom}>
+              <div className="mt-2">
+                <InfoNote>
+                  <div className="space-y-1.5">
+                    <div>1. Go to console.firebase.google.com → Add project (it's free).</div>
+                    <div>2. Click the Web icon (&lt;/&gt;) to register a web app — name it anything.</div>
+                    <div>
+                      3. It'll show a <code>firebaseConfig</code> object — copy the whole thing.
+                    </div>
+                    <div>4. In the left sidebar: Build → Firestore Database → Create database.</div>
+                    <div>
+                      5. Open the <b>Rules</b> tab there and paste this in, then Publish:
+                    </div>
+                  </div>
+                  <pre className="mt-2 p-2 rounded-lg overflow-x-auto" style={{ background: C.surface3, fontSize: 10, color: C.text }}>
+                    {rulesText}
+                  </pre>
+                  <div className="mt-2" style={{ color: C.orange }}>
+                    Heads up: those rules let anyone with the League ID read or write that league's data — fine for a friend group, just don't use anything guessable or sensitive.
+                  </div>
+                </InfoNote>
+                <div className="mb-2">
+                  <div className="text-[10px] uppercase tracking-wide mb-1" style={{ color: C.muted }}>
+                    Firebase config — paste the whole object
+                  </div>
+                  <textarea
+                    value={configText}
+                    onChange={(e) => setConfigText(e.target.value)}
+                    placeholder={'{\n  apiKey: "...",\n  authDomain: "...",\n  projectId: "...",\n  ...\n}'}
+                    rows={6}
+                    className="w-full rounded-2xl px-3 py-2.5 text-xs outline-none font-mono"
+                    style={{ background: C.surface2, color: C.text, border: `1px solid ${C.border}` }}
+                  />
+                </div>
+              </div>
+            </Collapse>
+
+            {localErr && (
+              <div className="text-xs mb-2" style={{ color: C.red }}>
+                {localErr}
+              </div>
+            )}
+            <PrimaryButton
+              onClick={connect}
+              disabled={!leagueIdInput.trim() || (useCustom && !configText.trim())}
+              style={{ width: '100%', textAlign: 'center', marginTop: 8 }}
+            >
+              Connect
+            </PrimaryButton>
+          </>
+        )
+      )}
+    </Card>
   );
 }
 
@@ -842,8 +1041,8 @@ function StandingsTab({ settings, players, rounds, courses, onGoPlayers }) {
           </div>
         </div>
         <div className="mt-3 h-2 rounded-full overflow-hidden flex" style={{ background: C.surface2 }}>
-          <div style={{ width: `${t1pct}%`, background: C.lime }} />
-          <div style={{ width: `${100 - t1pct}%`, background: C.gold }} />
+          <div className="bar-fill" style={{ width: `${t1pct}%`, background: C.lime }} />
+          <div className="bar-fill" style={{ width: `${100 - t1pct}%`, background: C.gold }} />
         </div>
         <div className="flex justify-between text-[11px] mt-1" style={{ color: C.faint }}>
           <span>{settings.team1Name} {t1pct}%</span>
@@ -901,7 +1100,7 @@ function StandingsTab({ settings, players, rounds, courses, onGoPlayers }) {
             Individual Standings
           </div>
           {leaderboard.map((p, i) => (
-            <div key={p.id} className="flex items-center justify-between py-2" style={{ borderBottom: `1px solid ${C.border}` }}>
+            <div key={p.id} className="flex items-center justify-between py-2 row-in" style={{ borderBottom: `1px solid ${C.border}`, animationDelay: `${Math.min(i, 12) * 0.04}s` }}>
               <div className="flex items-center gap-2 min-w-0">
                 <span className="font-display text-xs w-5" style={{ color: i === 0 ? C.gold : C.faint }}>
                   {i + 1}
@@ -914,7 +1113,7 @@ function StandingsTab({ settings, players, rounds, courses, onGoPlayers }) {
                 <span className="text-[10px]" style={{ color: C.faint }}>
                   thru {season.roundsPlayed[p.id]}
                 </span>
-                <span className="font-display text-base" style={{ color: i === 0 ? C.gold : C.text }}>
+                <span className="font-display text-base" style={{ color: i === 0 ? C.gold : C.text, textShadow: i === 0 ? '0 0 10px rgba(255,214,10,0.45)' : 'none' }}>
                   {season.seasonTotals[p.id]}
                 </span>
               </div>
@@ -1081,8 +1280,8 @@ function CalendarTab({ players, availability, setAvailability }) {
               <button
                 key={p.id}
                 onClick={() => toggleAvail(selectedDay, p.id, session)}
-                className="px-3 py-1.5 rounded-full text-xs font-semibold"
-                style={{ background: on ? C.lime : C.surface2, color: on ? '#000' : C.muted }}
+                className="px-3 py-1.5 rounded-full text-xs font-semibold tap"
+                style={{ background: on ? C.lime : C.surface2, color: on ? '#000' : C.muted, transition: 'background-color 0.2s ease, color 0.2s ease, transform 0.12s ease' }}
               >
                 {p.name.split(/\s+/)[0]}
               </button>
@@ -1127,14 +1326,15 @@ function CalendarTab({ players, availability, setAvailability }) {
               <button
                 key={i}
                 onClick={() => setSelectedDay(key)}
-                className="rounded-xl flex flex-col items-center justify-center py-1.5"
+                className="rounded-xl flex flex-col items-center justify-center py-1.5 tap"
                 style={{
                   background: isSelected ? C.lime : C.surface2,
                   border: isToday && !isSelected ? `1.5px solid ${C.lime}` : '1.5px solid transparent',
                   minHeight: 44,
+                  transition: 'background-color 0.2s ease, border-color 0.2s ease, transform 0.12s ease',
                 }}
               >
-                <span className="font-display text-sm leading-none" style={{ color: isSelected ? '#000' : C.text }}>
+                <span className="font-display text-sm leading-none" style={{ color: isSelected ? '#000' : C.text, transition: 'color 0.2s ease' }}>
                   {d}
                 </span>
                 {(am > 0 || pm > 0) && (
@@ -1287,7 +1487,7 @@ function GameFinderTab({ players, courses, setRounds, setEditingRoundId, setActi
             </div>
           )}
         </button>
-        {open && (
+        <Collapse open={open}>
           <div className="mt-2 pt-2" style={{ borderTop: `1px solid ${C.border}` }}>
             <div className="text-[10px] uppercase tracking-wide mb-1" style={{ color: C.lime }}>
               How to play
@@ -1304,14 +1504,14 @@ function GameFinderTab({ players, courses, setRounds, setEditingRoundId, setActi
             {selectable && (
               <button
                 onClick={() => selectGame(g.id)}
-                className="w-full py-2 rounded-xl text-xs font-bold text-center"
+                className="w-full py-2 rounded-xl text-xs font-bold text-center tap"
                 style={{ background: selected ? C.surface2 : C.lime, color: selected ? C.text : '#000' }}
               >
                 {selected ? '✓ Selected for this round — tap to unselect' : `Play ${g.name}`}
               </button>
             )}
           </div>
-        )}
+        </Collapse>
       </div>
     );
   }
@@ -1327,10 +1527,15 @@ function GameFinderTab({ players, courses, setRounds, setEditingRoundId, setActi
         </p>
         <div className="grid grid-cols-2 gap-2 mb-3">
           {players.map((p) => (
-            <button key={p.id} onClick={() => toggle(p.id)} className="flex items-center gap-2 rounded-xl px-3 py-2 text-left" style={{ background: C.surface2 }}>
+            <button key={p.id} onClick={() => toggle(p.id)} className="flex items-center gap-2 rounded-xl px-3 py-2 text-left tap" style={{ background: C.surface2 }}>
               <span
-                className="w-4 h-4 rounded shrink-0"
-                style={{ background: selectedIds.includes(p.id) ? C.lime : 'transparent', border: `1.5px solid ${selectedIds.includes(p.id) ? C.lime : C.faint}` }}
+                key={selectedIds.includes(p.id) ? 'on' : 'off'}
+                className="w-4 h-4 rounded shrink-0 check-pop"
+                style={{
+                  background: selectedIds.includes(p.id) ? C.lime : 'transparent',
+                  border: `1.5px solid ${selectedIds.includes(p.id) ? C.lime : C.faint}`,
+                  transition: 'background-color 0.15s ease, border-color 0.15s ease',
+                }}
               />
               <span className="text-sm truncate" style={{ color: C.text }}>
                 {p.name}
@@ -1453,11 +1658,11 @@ function PlayersTab({ settings, players, setPlayers }) {
             <RotateCcw size={12} style={{ display: 'inline', marginRight: 6 }} /> Sync from GHIN
           </GhostButton>
         </div>
-        {showGhinInfo && (
+        <Collapse open={showGhinInfo}>
           <InfoNote>
             GHIN doesn't offer a public live sync, so this stays a two-step process: add each player's GHIN number below, export a backup (Settings tab), refresh handicaps against GHIN on your computer, then import the updated file. Quotas recalculate automatically.
           </InfoNote>
-        )}
+        </Collapse>
 
         <div className="grid grid-cols-2 gap-2 mt-2">
           <TextField label="Name" value={form.name} onChange={(v) => setForm((f) => ({ ...f, name: v }))} placeholder="Player name" />
@@ -1965,7 +2170,7 @@ function LiveScoring({ settings, round, players, course, patchRound, setHoleScor
         <div className="mb-3">
           <button
             onClick={() => setShowRules((v) => !v)}
-            className="w-full flex items-center justify-between rounded-2xl px-3 py-2.5"
+            className="w-full flex items-center justify-between rounded-2xl px-3 py-2.5 tap"
             style={{ background: '#12140A', border: `1.5px solid ${C.lime}` }}
           >
             <div className="flex items-center gap-2 min-w-0">
@@ -1974,11 +2179,12 @@ function LiveScoring({ settings, round, players, course, patchRound, setHoleScor
                 Playing: {game.name}
               </span>
             </div>
-            <span className="text-xs font-semibold shrink-0" style={{ color: C.lime }}>
-              {showRules ? 'Hide rules' : 'Rules'}
+            <span className="flex items-center gap-1 text-xs font-semibold shrink-0" style={{ color: C.lime }}>
+              Rules
+              <ChevronDown size={14} style={{ transform: showRules ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.25s ease' }} />
             </span>
           </button>
-          {showRules && (
+          <Collapse open={showRules}>
             <div className="rounded-2xl p-3 mt-1" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
               <div className="text-[10px] uppercase tracking-wide mb-1" style={{ color: C.lime }}>
                 How to play
@@ -1993,7 +2199,7 @@ function LiveScoring({ settings, round, players, course, patchRound, setHoleScor
                 {game.bet}
               </p>
             </div>
-          )}
+          </Collapse>
         </div>
       )}
 
@@ -2005,11 +2211,13 @@ function LiveScoring({ settings, round, players, course, patchRound, setHoleScor
             <button
               key={i}
               onClick={() => setHole(i)}
-              className="shrink-0 w-9 h-9 rounded-full flex items-center justify-center font-display text-sm"
+              className="shrink-0 w-9 h-9 rounded-full flex items-center justify-center font-display text-sm tap"
               style={{
                 background: i === holeIdx ? C.lime : done ? C.surface3 : C.surface2,
                 color: i === holeIdx ? '#000' : done ? C.lime : C.muted,
                 border: done && i !== holeIdx ? `1px solid ${C.lime}` : '1px solid transparent',
+                transform: i === holeIdx ? 'scale(1.1)' : 'scale(1)',
+                transition: 'transform 0.2s cubic-bezier(0.34,1.56,0.64,1), background-color 0.2s ease, color 0.2s ease',
               }}
             >
               {i + 1}
@@ -2019,78 +2227,82 @@ function LiveScoring({ settings, round, players, course, patchRound, setHoleScor
       </div>
 
       {/* hole header */}
-      <div className="text-center py-3">
-        <div className="font-display text-3xl leading-none" style={{ color: C.text }}>
-          HOLE {holeIdx + 1}
+      <div key={holeIdx} className="tab-fade-in">
+        <div className="text-center py-3">
+          <div className="font-display text-3xl leading-none" style={{ color: C.text }}>
+            HOLE {holeIdx + 1}
+          </div>
+          <div className="font-display text-xs mt-1" style={{ color: C.muted }}>
+            PAR {hole.par} · STROKE INDEX {hole.si}
+          </div>
         </div>
-        <div className="font-display text-xs mt-1" style={{ color: C.muted }}>
-          PAR {hole.par} · STROKE INDEX {hole.si}
-        </div>
-      </div>
 
-      {game?.scoring === 'wolf' && (
-        <WolfPicker
-          players={activePlayers}
-          holeIdx={holeIdx}
-          pick={round.gameData?.wolfPicks?.[holeIdx]}
-          onChange={(patch) => patchGameData(round.id, { wolfPicks: { ...(round.gameData?.wolfPicks || {}), [holeIdx]: patch } })}
-        />
-      )}
-      {game?.scoring === 'bbb' && (
-        <BBBPicker
-          players={activePlayers}
-          pick={round.gameData?.bbbPicks?.[holeIdx]}
-          onChange={(patch) => patchGameData(round.id, { bbbPicks: { ...(round.gameData?.bbbPicks || {}), [holeIdx]: patch } })}
-        />
-      )}
+        {game?.scoring === 'wolf' && (
+          <WolfPicker
+            players={activePlayers}
+            holeIdx={holeIdx}
+            pick={round.gameData?.wolfPicks?.[holeIdx]}
+            onChange={(patch) => patchGameData(round.id, { wolfPicks: { ...(round.gameData?.wolfPicks || {}), [holeIdx]: patch } })}
+          />
+        )}
+        {game?.scoring === 'bbb' && (
+          <BBBPicker
+            players={activePlayers}
+            pick={round.gameData?.bbbPicks?.[holeIdx]}
+            onChange={(patch) => patchGameData(round.id, { bbbPicks: { ...(round.gameData?.bbbPicks || {}), [holeIdx]: patch } })}
+          />
+        )}
 
-      {/* score rows */}
-      {activePlayers.map((p) => {
-        const strokes = strokesThisHole(round, p, course, holeIdx);
-        const gross = round.playerData[p.id]?.holeScores?.[holeIdx];
-        const eff = gross != null ? (net ? gross - strokes : gross) : null;
-        const pts = eff != null ? stablefordPoints(eff, hole.par) : null;
-        return (
-          <div key={p.id} className="rounded-2xl p-3 mb-2" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
-            <div className="flex items-center justify-between">
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-1.5">
-                  <span className="font-medium text-sm truncate" style={{ color: C.text }}>
-                    {p.name}
-                  </span>
-                  {strokes > 0 && (
-                    <span className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: 'rgba(180,255,57,0.15)', color: C.lime }}>
-                      {'●'.repeat(Math.min(strokes, 3))} {strokes > 1 ? `+${strokes}` : 'stroke'}
+        {/* score rows */}
+        {activePlayers.map((p) => {
+          const strokes = strokesThisHole(round, p, course, holeIdx);
+          const gross = round.playerData[p.id]?.holeScores?.[holeIdx];
+          const eff = gross != null ? (net ? gross - strokes : gross) : null;
+          const pts = eff != null ? stablefordPoints(eff, hole.par) : null;
+          return (
+            <div key={p.id} className="rounded-2xl p-3 mb-2" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
+              <div className="flex items-center justify-between">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-medium text-sm truncate" style={{ color: C.text }}>
+                      {p.name}
                     </span>
-                  )}
-                </div>
-                <div className="text-[10px] mt-0.5" style={{ color: C.faint }}>
-                  {showDogfightInfo
-                    ? pts != null
-                      ? `${pts} pt${pts === 1 ? '' : 's'} this hole${net && strokes > 0 ? ` (net ${eff})` : ''}`
+                    {strokes > 0 && (
+                      <span className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold check-pop" style={{ background: 'rgba(180,255,57,0.15)', color: C.lime }}>
+                        {'●'.repeat(Math.min(strokes, 3))} {strokes > 1 ? `+${strokes}` : 'stroke'}
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[10px] mt-0.5" style={{ color: C.faint }}>
+                    {showDogfightInfo
+                      ? pts != null
+                        ? `${pts} pt${pts === 1 ? '' : 's'} this hole${net && strokes > 0 ? ` (net ${eff})` : ''}`
+                        : strokes > 0
+                        ? `Gets ${strokes} stroke${strokes > 1 ? 's' : ''} here`
+                        : 'No stroke this hole'
                       : strokes > 0
                       ? `Gets ${strokes} stroke${strokes > 1 ? 's' : ''} here`
-                      : 'No stroke this hole'
-                    : strokes > 0
-                    ? `Gets ${strokes} stroke${strokes > 1 ? 's' : ''} here`
-                    : 'No stroke this hole'}
+                      : 'No stroke this hole'}
+                  </div>
+                </div>
+                <div className="flex items-center gap-3 shrink-0">
+                  <button onClick={() => bump(p.id, -1)} className="w-9 h-9 rounded-full flex items-center justify-center tap" style={{ background: C.surface2, color: C.text }}>
+                    <Minus size={15} />
+                  </button>
+                  <button onClick={() => resetToPar(p.id)} className="w-8 text-center font-display text-xl" style={{ color: gross != null ? C.text : C.faint }}>
+                    <span key={gross ?? 'par'} className="inline-block pop-in">
+                      {gross ?? hole.par}
+                    </span>
+                  </button>
+                  <button onClick={() => bump(p.id, 1)} className="w-9 h-9 rounded-full flex items-center justify-center tap" style={{ background: C.lime, color: '#000' }}>
+                    <Plus size={15} />
+                  </button>
                 </div>
               </div>
-              <div className="flex items-center gap-3 shrink-0">
-                <button onClick={() => bump(p.id, -1)} className="w-9 h-9 rounded-full flex items-center justify-center" style={{ background: C.surface2, color: C.text }}>
-                  <Minus size={15} />
-                </button>
-                <button onClick={() => resetToPar(p.id)} className="w-8 text-center font-display text-xl" style={{ color: gross != null ? C.text : C.faint }}>
-                  {gross ?? hole.par}
-                </button>
-                <button onClick={() => bump(p.id, 1)} className="w-9 h-9 rounded-full flex items-center justify-center" style={{ background: C.lime, color: '#000' }}>
-                  <Plus size={15} />
-                </button>
-              </div>
             </div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
       <div className="text-[10px] text-center mb-3" style={{ color: C.faint }}>
         Defaults to par — tap +/− to adjust, tap the score to reset it
       </div>
@@ -2220,40 +2432,56 @@ function RoundSummary({ round, course, players, courses, rounds, settings, onDon
 
   return (
     <div>
-      <div className="text-center py-3">
-        <div className="font-display text-3xl leading-none" style={{ color: C.lime, textShadow: '0 0 14px rgba(180,255,57,0.4)' }}>
+      <div className="text-center py-3 fade-in" style={{ position: 'relative' }}>
+        <div className="font-display text-3xl leading-none pop-in" style={{ color: C.lime, textShadow: '0 0 14px rgba(180,255,57,0.4)' }}>
           ROUND COMPLETE
         </div>
         <div className="text-xs mt-1" style={{ color: C.muted }}>
           {round.date} · {course?.name} · {round.holes}-hole{round.casual ? ' · Casual' : ''}
           {game ? ` · ${game.name}` : ''}
         </div>
+        {['⛳', '🏆', '✨', '🎉'].map((e, i) => (
+          <span
+            key={i}
+            className="float-particle text-lg"
+            style={{ left: `${20 + i * 20}%`, top: '10px', animationDelay: `${i * 0.12}s` }}
+          >
+            {e}
+          </span>
+        ))}
       </div>
 
-      <GameScoreboardCard settings={settings} round={round} course={course} players={activePlayers} readOnly />
+      <div className="tab-fade-in" style={{ animationDelay: '0.08s' }}>
+        <GameScoreboardCard settings={settings} round={round} course={course} players={activePlayers} readOnly />
+      </div>
 
-      <Card>
-        <div className="font-display text-lg mb-2" style={{ color: C.text }}>
-          Total Score
-        </div>
-        {scoreRows.map(({ p, total, thru, toPar }, i) => (
-          <BoardRow
-            key={p.id}
-            rank={i + 1}
-            name={p.name}
-            value={thru > 0 ? total : '–'}
-            sub={thru > 0 ? `${toPar === 0 ? 'E' : toPar > 0 ? `+${toPar}` : toPar} · thru ${thru}` : 'no scores'}
-          />
-        ))}
-      </Card>
+      <div className="tab-fade-in" style={{ animationDelay: '0.16s' }}>
+        <Card>
+          <div className="font-display text-lg mb-2" style={{ color: C.text }}>
+            Total Score
+          </div>
+          {scoreRows.map(({ p, total, thru, toPar }, i) => (
+            <BoardRow
+              key={p.id}
+              rank={i + 1}
+              name={p.name}
+              value={thru > 0 ? total : '–'}
+              sub={thru > 0 ? `${toPar === 0 ? 'E' : toPar > 0 ? `+${toPar}` : toPar} · thru ${thru}` : 'no scores'}
+            />
+          ))}
+        </Card>
+      </div>
 
-      {round.entryMode === 'holebyhole' ? (
-        <HoleByHoleRecap round={round} course={course} players={activePlayers} />
-      ) : (
-        <EmptyNote text="This round was scored by total points, not hole-by-hole, so there's no scorecard to show." />
-      )}
+      <div className="tab-fade-in" style={{ animationDelay: '0.24s' }}>
+        {round.entryMode === 'holebyhole' ? (
+          <HoleByHoleRecap round={round} course={course} players={activePlayers} />
+        ) : (
+          <EmptyNote text="This round was scored by total points, not hole-by-hole, so there's no scorecard to show." />
+        )}
+      </div>
 
       {hasMoney && (
+        <div className="tab-fade-in" style={{ animationDelay: '0.32s' }}>
         <Card>
           <div className="font-display text-lg mb-2" style={{ color: C.text }}>
             Money Won
@@ -2289,9 +2517,11 @@ function RoundSummary({ round, course, players, courses, rounds, settings, onDon
             </div>
           )}
         </Card>
+        </div>
       )}
 
       {impact && (
+        <div className="tab-fade-in" style={{ animationDelay: '0.4s' }}>
         <Card>
           <div className="font-display text-lg mb-1" style={{ color: C.text }}>
             Dogfight League Impact
@@ -2305,7 +2535,7 @@ function RoundSummary({ round, course, players, courses, rounds, settings, onDon
             const total = impact.season.seasonTotals[x.id];
             const rank = impact.leaderboard.findIndex((pp) => pp.id === x.id) + 1;
             return (
-              <div key={x.id} className="flex items-center justify-between py-2" style={{ borderBottom: `1px solid ${C.border}` }}>
+              <div key={x.id} className="flex items-center justify-between py-2 row-in" style={{ borderBottom: `1px solid ${C.border}`, animationDelay: `${0.4 + Math.min(i, 10) * 0.04}s` }}>
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="font-display text-xs w-4" style={{ color: i === 0 ? C.gold : C.faint }}>
                     {i + 1}
@@ -2326,6 +2556,7 @@ function RoundSummary({ round, course, players, courses, rounds, settings, onDon
             );
           })}
         </Card>
+        </div>
       )}
 
       <PrimaryButton onClick={onDone} style={{ width: '100%', textAlign: 'center', marginBottom: 8 }}>
@@ -2570,12 +2801,13 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
               <button
                 key={p.id}
                 onClick={() => togglePlayerInRound(editing.id, p.id)}
-                className="flex items-center gap-2 rounded-xl px-3 py-2 text-left"
+                className="flex items-center gap-2 rounded-xl px-3 py-2 text-left tap"
                 style={{ background: C.surface2 }}
               >
                 <span
-                  className="w-4 h-4 rounded shrink-0"
-                  style={{ background: selectedIds.includes(p.id) ? C.lime : 'transparent', border: `1.5px solid ${selectedIds.includes(p.id) ? C.lime : C.faint}` }}
+                  key={selectedIds.includes(p.id) ? 'on' : 'off'}
+                  className="w-4 h-4 rounded shrink-0 check-pop"
+                  style={{ background: selectedIds.includes(p.id) ? C.lime : 'transparent', border: `1.5px solid ${selectedIds.includes(p.id) ? C.lime : C.faint}`, transition: 'background-color 0.15s ease, border-color 0.15s ease' }}
                 />
                 <span className="text-sm truncate" style={{ color: C.text }}>
                   {p.name}
@@ -2600,12 +2832,17 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
                 <button
                   key={p.id}
                   onClick={() => toggleSkinsOptIn(editing.id, p.id)}
-                  className="flex items-center gap-2 rounded-xl px-3 py-2 text-left"
+                  className="flex items-center gap-2 rounded-xl px-3 py-2 text-left tap"
                   style={{ background: C.surface2 }}
                 >
                   <span
-                    className="w-4 h-4 rounded shrink-0"
-                    style={{ background: (editing.skinsOptIn || []).includes(p.id) ? C.lime : 'transparent', border: `1.5px solid ${(editing.skinsOptIn || []).includes(p.id) ? C.lime : C.faint}` }}
+                    key={(editing.skinsOptIn || []).includes(p.id) ? 'on' : 'off'}
+                    className="w-4 h-4 rounded shrink-0 check-pop"
+                    style={{
+                      background: (editing.skinsOptIn || []).includes(p.id) ? C.lime : 'transparent',
+                      border: `1.5px solid ${(editing.skinsOptIn || []).includes(p.id) ? C.lime : C.faint}`,
+                      transition: 'background-color 0.15s ease, border-color 0.15s ease',
+                    }}
                   />
                   <span className="text-sm truncate" style={{ color: C.text }}>
                     {p.name}
@@ -2817,7 +3054,7 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
         </div>
       )}
 
-      {visibleRounds.map((r) => {
+      {visibleRounds.map((r, idx) => {
         const course = courses.find((c) => c.id === r.courseId);
         const roundPlayers = roundPlayerList(r, players);
         const scored = course ? roundPlayers.filter((p) => playerPointsInRound(r, p, course) != null).length : 0;
@@ -2826,12 +3063,13 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
           <button
             key={r.id}
             onClick={() => (selectMode ? toggleSelectRound(r.id) : setEditingRoundId(r.id))}
-            className="w-full text-left rounded-3xl p-4 mb-3 flex items-center gap-3"
-            style={{ background: C.surface, border: `1px solid ${selectMode && selected ? C.lime : C.border}` }}
+            className="w-full text-left rounded-3xl p-4 mb-3 flex items-center gap-3 tab-fade-in"
+            style={{ background: C.surface, border: `1px solid ${selectMode && selected ? C.lime : C.border}`, animationDelay: `${Math.min(idx, 10) * 0.05}s`, transition: 'border-color 0.2s ease' }}
           >
             {selectMode && (
               <span
-                className="w-5 h-5 rounded shrink-0"
+                key={selected ? 'on' : 'off'}
+                className="w-5 h-5 rounded shrink-0 check-pop"
                 style={{ background: selected ? C.lime : 'transparent', border: `1.5px solid ${selected ? C.lime : C.faint}` }}
               />
             )}
@@ -2852,7 +3090,7 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
                     </span>
                   )}
                   {r.status === 'live' && (
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold" style={{ background: C.red, color: '#fff' }}>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold live-pulse" style={{ background: C.red, color: '#fff' }}>
                       ● LIVE
                     </span>
                   )}
@@ -2911,7 +3149,7 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
 }
 
 // ---------- Settings tab ----------
-function SettingsTab({ settings, setSettings, players, setPlayers, courses, rounds, setRounds, availability, setAvailability }) {
+function SettingsTab({ settings, setSettings, players, setPlayers, courses, rounds, setRounds, availability, setAvailability, cloudStatus, cloudError, cloudLeagueId }) {
   const fileInputRef = useRef(null);
   function patch(p) {
     setSettings((s) => ({ ...s, ...p }));
@@ -2972,6 +3210,8 @@ function SettingsTab({ settings, setSettings, players, setPlayers, courses, roun
 
   return (
     <div>
+      <CloudSyncCard cloudStatus={cloudStatus} cloudError={cloudError} cloudLeagueId={cloudLeagueId} />
+
       <Card>
         <div className="font-display text-xl mb-3" style={{ color: C.text }}>
           League Settings
@@ -3107,7 +3347,11 @@ function SettingsTab({ settings, setSettings, players, setPlayers, courses, roun
       {confirmErase && (
         <ConfirmDialog
           title="Erase everything?"
-          message="This wipes all players, courses, rounds, and settings back to defaults. This can't be undone — export a backup first if you want to keep this data."
+          message={
+            cloudStatus === 'connected'
+              ? "This wipes all players, rounds, and settings back to defaults — and since you're connected to Cloud Sync, it erases the shared data for everyone in this league, not just this device. Export a backup first if you want to keep this data."
+              : "This wipes all players, courses, rounds, and settings back to defaults. This can't be undone — export a backup first if you want to keep this data."
+          }
           confirmLabel="Erase"
           onCancel={() => setConfirmErase(false)}
           onConfirm={eraseEverything}
@@ -3225,6 +3469,13 @@ function DogfightLeague() {
   const [editingRoundId, setEditingRoundId] = useState(null);
   const saveTimer = useRef(null);
 
+  const [cloudStatus, setCloudStatus] = useState('disconnected'); // disconnected | connecting | connected | error | unavailable
+  const [cloudError, setCloudError] = useState('');
+  const [cloudLeagueId, setCloudLeagueId] = useState('');
+  const dbRef = useRef(null);
+  const lastSyncedRef = useRef({ players: {}, rounds: {}, availability: {}, settingsJSON: null });
+  const unsubsRef = useRef([]);
+
   useEffect(() => {
     (async () => {
       try {
@@ -3241,6 +3492,83 @@ function DogfightLeague() {
     })();
   }, []);
 
+  // connect to Firebase (if configured) once on mount; no-op and harmless if the SDK isn't loaded
+  useEffect(() => {
+    const cfg = loadCloudConfig();
+    if (!cfg) {
+      setCloudStatus('disconnected');
+      return;
+    }
+    if (!fbAvailable()) {
+      setCloudStatus('unavailable');
+      return;
+    }
+    setCloudStatus('connecting');
+    setCloudLeagueId(cfg.leagueId);
+    try {
+      if (!window.firebase.apps.length) window.firebase.initializeApp(cfg);
+      const db = window.firebase.firestore();
+      dbRef.current = db;
+      const base = db.collection('leagues').doc(cfg.leagueId);
+      const onErr = (err) => {
+        setCloudStatus('error');
+        setCloudError(err && err.message ? err.message : String(err));
+      };
+
+      const unsub1 = base.collection('players').onSnapshot((snap) => {
+        const arr = [];
+        const map = {};
+        snap.forEach((doc) => {
+          const d = { id: doc.id, ...doc.data() };
+          arr.push(d);
+          map[doc.id] = JSON.stringify(d);
+        });
+        lastSyncedRef.current.players = map;
+        setPlayers(arr);
+      }, onErr);
+
+      const unsub2 = base.collection('rounds').onSnapshot((snap) => {
+        const arr = [];
+        const map = {};
+        snap.forEach((doc) => {
+          const d = { id: doc.id, ...doc.data() };
+          arr.push(d);
+          map[doc.id] = JSON.stringify(d);
+        });
+        lastSyncedRef.current.rounds = map;
+        setRounds(arr);
+      }, onErr);
+
+      const unsub3 = base.collection('availability').onSnapshot((snap) => {
+        const obj = {};
+        const map = {};
+        snap.forEach((doc) => {
+          obj[doc.id] = doc.data();
+          map[doc.id] = JSON.stringify(doc.data());
+        });
+        lastSyncedRef.current.availability = map;
+        setAvailability(obj);
+      }, onErr);
+
+      const unsub4 = base.collection('meta').doc('settings').onSnapshot((doc) => {
+        if (doc.exists) {
+          const data = doc.data();
+          lastSyncedRef.current.settingsJSON = JSON.stringify(data);
+          setSettings((s) => ({ ...DEFAULT_SETTINGS, ...data }));
+        }
+      }, onErr);
+
+      unsubsRef.current = [unsub1, unsub2, unsub3, unsub4];
+      setCloudStatus('connected');
+    } catch (e) {
+      setCloudStatus('error');
+      setCloudError(e && e.message ? e.message : String(e));
+    }
+    return () => {
+      unsubsRef.current.forEach((u) => u && u());
+    };
+  }, []);
+
   useEffect(() => {
     if (loading) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -3248,9 +3576,81 @@ function DogfightLeague() {
       try {
         await window.storage.set(STORAGE_KEY, JSON.stringify({ settings, players, rounds, availability }));
       } catch (e) {}
+
+      if (dbRef.current && cloudStatus === 'connected') {
+        try {
+          const db = dbRef.current;
+          const base = db.collection('leagues').doc(cloudLeagueId);
+          const batch = db.batch();
+          let dirty = false;
+
+          const curPlayerIds = new Set(players.map((p) => p.id));
+          players.forEach((p) => {
+            const j = JSON.stringify(p);
+            if (lastSyncedRef.current.players[p.id] !== j) {
+              batch.set(base.collection('players').doc(p.id), p);
+              lastSyncedRef.current.players[p.id] = j;
+              dirty = true;
+            }
+          });
+          Object.keys(lastSyncedRef.current.players).forEach((id) => {
+            if (!curPlayerIds.has(id)) {
+              batch.delete(base.collection('players').doc(id));
+              delete lastSyncedRef.current.players[id];
+              dirty = true;
+            }
+          });
+
+          const curRoundIds = new Set(rounds.map((r) => r.id));
+          rounds.forEach((r) => {
+            const j = JSON.stringify(r);
+            if (lastSyncedRef.current.rounds[r.id] !== j) {
+              batch.set(base.collection('rounds').doc(r.id), r);
+              lastSyncedRef.current.rounds[r.id] = j;
+              dirty = true;
+            }
+          });
+          Object.keys(lastSyncedRef.current.rounds).forEach((id) => {
+            if (!curRoundIds.has(id)) {
+              batch.delete(base.collection('rounds').doc(id));
+              delete lastSyncedRef.current.rounds[id];
+              dirty = true;
+            }
+          });
+
+          const curAvailKeys = new Set(Object.keys(availability));
+          curAvailKeys.forEach((key) => {
+            const j = JSON.stringify(availability[key]);
+            if (lastSyncedRef.current.availability[key] !== j) {
+              batch.set(base.collection('availability').doc(key), availability[key]);
+              lastSyncedRef.current.availability[key] = j;
+              dirty = true;
+            }
+          });
+          Object.keys(lastSyncedRef.current.availability).forEach((key) => {
+            if (!curAvailKeys.has(key)) {
+              batch.delete(base.collection('availability').doc(key));
+              delete lastSyncedRef.current.availability[key];
+              dirty = true;
+            }
+          });
+
+          const settingsJSON = JSON.stringify(settings);
+          if (lastSyncedRef.current.settingsJSON !== settingsJSON) {
+            batch.set(base.collection('meta').doc('settings'), settings);
+            lastSyncedRef.current.settingsJSON = settingsJSON;
+            dirty = true;
+          }
+
+          if (dirty) await batch.commit();
+        } catch (e) {
+          setCloudStatus('error');
+          setCloudError(e && e.message ? e.message : String(e));
+        }
+      }
     }, 500);
     return () => clearTimeout(saveTimer.current);
-  }, [settings, players, rounds, availability, loading]);
+  }, [settings, players, rounds, availability, loading, cloudStatus, cloudLeagueId]);
 
   if (loading) {
     return (
@@ -3273,11 +3673,45 @@ function DogfightLeague() {
         .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
         input::placeholder { color: ${C.faint}; }
         select { color-scheme: dark; }
+
+        @keyframes fadeSlideUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes popIn { 0% { transform: scale(0.82); opacity: 0; } 65% { transform: scale(1.04); opacity: 1; } 100% { transform: scale(1); } }
+        @keyframes modalPop { 0% { transform: scale(0.9) translateY(6px); opacity: 0; } 100% { transform: scale(1) translateY(0); opacity: 1; } }
+        @keyframes pulseGlow { 0%, 100% { box-shadow: 0 0 0 0 rgba(255,69,58,0.55); } 50% { box-shadow: 0 0 0 6px rgba(255,69,58,0); } }
+        @keyframes limePulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(180,255,57,0.4); } 50% { box-shadow: 0 0 0 5px rgba(180,255,57,0); } }
+        @keyframes floatUp { 0% { transform: translateY(0) scale(1) rotate(0deg); opacity: 1; } 100% { transform: translateY(-70px) scale(1.5) rotate(20deg); opacity: 0; } }
+        @keyframes checkPop { 0% { transform: scale(0.6); } 60% { transform: scale(1.25); } 100% { transform: scale(1); } }
+        @keyframes shimmerBar { 0% { background-position: 0% 0; } 100% { background-position: 200% 0; } }
+        @keyframes rowIn { from { opacity: 0; transform: translateX(-6px); } to { opacity: 1; transform: translateX(0); } }
+        @keyframes barFill { from { width: 0%; } }
+        @keyframes wiggle { 0%, 100% { transform: rotate(0deg); } 25% { transform: rotate(-4deg); } 75% { transform: rotate(4deg); } }
+        .row-in { animation: rowIn 0.35s cubic-bezier(0.16,1,0.3,1) both; }
+        .bar-fill { transition: width 0.7s cubic-bezier(0.16,1,0.3,1); }
+        .collapse-grid { display: grid; transition: grid-template-rows 0.28s cubic-bezier(0.16,1,0.3,1); grid-template-rows: 0fr; }
+        .collapse-grid.open { grid-template-rows: 1fr; }
+        .collapse-inner { overflow: hidden; min-height: 0; }
+
+        .tab-fade-in { animation: fadeSlideUp 0.32s cubic-bezier(0.16,1,0.3,1) both; }
+        .fade-in { animation: fadeIn 0.35s ease both; }
+        .pop-in { animation: popIn 0.28s cubic-bezier(0.34,1.56,0.64,1) both; }
+        .modal-pop { animation: modalPop 0.22s cubic-bezier(0.34,1.56,0.64,1) both; }
+        .backdrop-fade { animation: fadeIn 0.18s ease both; }
+        .live-pulse { animation: pulseGlow 1.8s ease-in-out infinite; }
+        .lime-pulse { animation: limePulse 1.8s ease-in-out infinite; }
+        .check-pop { animation: checkPop 0.22s cubic-bezier(0.34,1.56,0.64,1) both; }
+        .float-particle { position: absolute; animation: floatUp 1.4s ease-out forwards; pointer-events: none; }
+
+        .tap { transition: transform 0.12s ease, opacity 0.12s ease, background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease; -webkit-tap-highlight-color: transparent; }
+        .tap:active { transform: scale(0.94); }
+        button { transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease; }
+        button:not(:disabled):active { transform: scale(0.96); }
+        a, button, [role="button"] { -webkit-tap-highlight-color: transparent; }
       `}</style>
       <div className="app-root min-h-screen">
         <div className="flex items-center gap-3 px-4 pt-6 pb-4">
           <div className="text-3xl">🏌️</div>
-          <div>
+          <div className="flex-1 min-w-0">
             <div className="font-display text-2xl leading-none" style={{ color: C.text }}>
               {settings.leagueName}
             </div>
@@ -3285,6 +3719,22 @@ function DogfightLeague() {
               Quota points · Weekly purse · Skins · Season standings
             </div>
           </div>
+          <button
+            onClick={() => setActiveTab('settings')}
+            className="flex items-center gap-1.5 px-2 py-1 rounded-full shrink-0 tap"
+            style={{ background: C.surface2 }}
+            title={cloudStatus === 'connected' ? `Synced · ${cloudLeagueId}` : 'Local only'}
+          >
+            <span
+              className={`w-2 h-2 rounded-full ${cloudStatus === 'connected' ? 'lime-pulse' : ''}`}
+              style={{
+                background: cloudStatus === 'connected' ? C.lime : cloudStatus === 'error' ? C.red : cloudStatus === 'connecting' ? C.gold : C.faint,
+              }}
+            />
+            <span className="text-[10px] font-semibold" style={{ color: C.muted }}>
+              {cloudStatus === 'connected' ? 'Synced' : cloudStatus === 'connecting' ? 'Syncing…' : cloudStatus === 'error' ? 'Sync error' : 'Local'}
+            </span>
+          </button>
         </div>
 
         <div className="flex gap-5 overflow-x-auto px-4 pb-2 scrollbar-hide sticky top-0 z-10" style={{ background: C.black, borderBottom: `1px solid ${C.border}` }}>
@@ -3296,14 +3746,18 @@ function DogfightLeague() {
                 if (t.id !== 'rounds') setEditingRoundId(null);
               }}
               className="shrink-0 pb-2 text-sm font-semibold whitespace-nowrap"
-              style={{ color: activeTab === t.id ? C.text : C.muted, borderBottom: activeTab === t.id ? `2px solid ${C.lime}` : '2px solid transparent' }}
+              style={{
+                color: activeTab === t.id ? C.text : C.muted,
+                borderBottom: activeTab === t.id ? `2px solid ${C.lime}` : '2px solid transparent',
+                transition: 'color 0.2s ease, border-color 0.2s ease',
+              }}
             >
               {t.label}
             </button>
           ))}
         </div>
 
-        <div className="px-4 pt-4 pb-10">
+        <div key={activeTab} className="px-4 pt-4 pb-10 tab-fade-in">
           {activeTab === 'standings' && <StandingsTab settings={settings} players={players} rounds={rounds} courses={courses} onGoPlayers={() => setActiveTab('players')} />}
           {activeTab === 'rounds' && (
             <RoundsTab settings={settings} players={players} courses={courses} rounds={rounds} setRounds={setRounds} editingRoundId={editingRoundId} setEditingRoundId={setEditingRoundId} />
@@ -3325,6 +3779,9 @@ function DogfightLeague() {
               setRounds={setRounds}
               availability={availability}
               setAvailability={setAvailability}
+              cloudStatus={cloudStatus}
+              cloudError={cloudError}
+              cloudLeagueId={cloudLeagueId}
             />
           )}
           {activeTab === 'howitworks' && <HowItWorksTab settings={settings} />}
