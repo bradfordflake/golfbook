@@ -10,6 +10,39 @@
 <script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+<script type="module">
+  import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js';
+  import { getAI, getGenerativeModel, GoogleAIBackend } from 'https://www.gstatic.com/firebasejs/12.16.0/firebase-ai.js';
+
+  window.dflAI = { ready: false, error: null };
+
+  const AI_FIREBASE_CONFIG = {
+    apiKey: "AIzaSyCEUwoGcIFsioaYXplXiR-w8NC5mJzRNCI",
+    authDomain: "golf-book-bc3b2.firebaseapp.com",
+    projectId: "golf-book-bc3b2",
+    storageBucket: "golf-book-bc3b2.firebasestorage.app",
+    messagingSenderId: "336792673125",
+    appId: "1:336792673125:web:e94c56a971b4da5b8fdf8c",
+    measurementId: "G-R3Y37SYT02"
+  };
+
+  try {
+    const aiApp = initializeApp(AI_FIREBASE_CONFIG, 'dfl-ai-app');
+    const ai = getAI(aiApp, { backend: new GoogleAIBackend() });
+    const model = getGenerativeModel(ai, {
+      model: 'gemini-3.5-flash',
+      generationConfig: { responseMimeType: 'application/json' },
+    });
+    window.dflAI.generate = async function (prompt) {
+      const result = await model.generateContent(prompt);
+      return result.response.text();
+    };
+    window.dflAI.ready = true;
+  } catch (e) {
+    window.dflAI.error = (e && e.message) ? e.message : String(e);
+    console.error('Gemini init failed:', e);
+  }
+</script>
 <style>
   html, body { background:#000000; margin:0; padding:0; }
   #root { min-height:100vh; }
@@ -89,6 +122,24 @@ const DEFAULT_FIREBASE_CONFIG = {
 };
 function fbAvailable() {
   return typeof window !== 'undefined' && !!window.firebase;
+}
+function aiAvailable() {
+  return typeof window !== 'undefined' && !!(window.dflAI && window.dflAI.ready);
+}
+async function callGeminiJSON(prompt) {
+  if (!aiAvailable()) {
+    const reason = typeof window !== 'undefined' && window.dflAI && window.dflAI.error ? window.dflAI.error : null;
+    return { ok: false, error: reason || "AI isn't available here — this works in the hosted app, not this in-chat preview." };
+  }
+  try {
+    const text = await window.dflAI.generate(prompt);
+    let cleaned = text.trim();
+    cleaned = cleaned.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/, '');
+    const data = JSON.parse(cleaned);
+    return { ok: true, data };
+  } catch (e) {
+    return { ok: false, error: e && e.message ? e.message : String(e) };
+  }
 }
 function loadCloudConfig() {
   try {
@@ -968,6 +1019,9 @@ service cloud.firestore {
 function StandingsTab({ settings, players, rounds, courses, onGoPlayers }) {
   const leagueRounds = rounds.filter((r) => !r.casual);
   const season = computeSeason(settings, leagueRounds, courses, players);
+  const [awards, setAwards] = useState(null);
+  const [awardsLoading, setAwardsLoading] = useState(false);
+  const [awardsError, setAwardsError] = useState('');
   const team1 = players.filter((p) => p.team === 'team1');
   const team2 = players.filter((p) => p.team === 'team2');
   const t1pts = team1.reduce((s, p) => s + (season.seasonTotals[p.id] || 0), 0);
@@ -1004,6 +1058,49 @@ function StandingsTab({ settings, players, rounds, courses, onGoPlayers }) {
 
   const leaderboard = [...players].sort((a, b) => (season.seasonTotals[b.id] || 0) - (season.seasonTotals[a.id] || 0));
   const leader = season.anyResults ? leaderboard[0] : null;
+
+  const skinsByPlayer = {};
+  players.forEach((p) => (skinsByPlayer[p.id] = 0));
+  leagueRounds.forEach((r) => {
+    const course = courses.find((c) => c.id === r.courseId);
+    if (!course) return;
+    const skins = computeSkinsForRound(r, players, course, settings);
+    if (skins) Object.entries(skins.tally).forEach(([pid, count]) => (skinsByPlayer[pid] = (skinsByPlayer[pid] || 0) + count));
+  });
+
+  async function generateAwards() {
+    setAwardsError('');
+    setAwards(null);
+    if (!season.anyResults) {
+      setAwardsError('Play at least one round first.');
+      return;
+    }
+    setAwardsLoading(true);
+    const summary = leaderboard
+      .map(
+        (p, i) =>
+          `${p.name}: rank #${i + 1}, ${season.seasonTotals[p.id] || 0} season pts, ${(season.rawTotals[p.id] || 0) >= 0 ? '+' : ''}${season.rawTotals[p.id] || 0} vs quota, ${season.roundsPlayed[p.id] || 0} rounds played, ${skinsByPlayer[p.id] || 0} skins won, team ${p.team === 'team1' ? settings.team1Name : settings.team2Name}`
+      )
+      .join('\n');
+    const prompt = `You are writing a fun, lighthearted end-of-season awards write-up for a golf betting league called "${settings.leagueName}". Here is the season data, one line per player:
+${summary}
+
+Team battle: ${settings.team1Name} ${t1pts} pts vs ${settings.team2Name} ${t2pts} pts.
+
+Write 5 to 6 award categories (invent fitting categories from the data — things like season champion, most skins won, biggest overachiever vs quota, most rounds played / most dedicated, closest rivalry, etc). For each award, pick a real player from the data above by exact name where it fits the category. Keep the tone fun, warm, a little teasing — like a golf buddies group chat, not a corporate write-up. Each blurb should be 1-2 sentences and reference an actual stat from the data.
+Respond with ONLY this JSON, no other text: [{"title": "Award Name", "player": "Full Name", "blurb": "1-2 sentence writeup"}]`;
+    const res = await callGeminiJSON(prompt);
+    setAwardsLoading(false);
+    if (!res.ok) {
+      setAwardsError(res.error);
+      return;
+    }
+    if (!Array.isArray(res.data)) {
+      setAwardsError("That didn't come back right — give it another tap.");
+      return;
+    }
+    setAwards(res.data);
+  }
 
   return (
     <div>
@@ -1119,6 +1216,47 @@ function StandingsTab({ settings, players, rounds, courses, onGoPlayers }) {
               </div>
             </div>
           ))}
+        </Card>
+      )}
+
+      {season.anyResults && (
+        <Card>
+          <div className="font-display text-xl mb-1" style={{ color: C.text }}>
+            🏆 AI Season Awards
+          </div>
+          <p className="text-xs mb-3" style={{ color: C.muted }}>
+            Generate a fun awards write-up from this season's actual standings, skins, and quota results.
+          </p>
+          <PrimaryButton onClick={generateAwards} disabled={awardsLoading} style={{ width: '100%', textAlign: 'center' }}>
+            {awardsLoading ? 'Writing…' : awards ? '✨ Regenerate Awards' : '✨ Generate Awards'}
+          </PrimaryButton>
+          {awardsError && (
+            <div className="text-xs mt-2" style={{ color: C.red }}>
+              {awardsError}
+            </div>
+          )}
+          {awards && (
+            <div className="mt-3">
+              {awards.map((a, i) => (
+                <div key={i} className="rounded-2xl p-3 mb-2 row-in" style={{ background: C.surface2, animationDelay: `${i * 0.08}s` }}>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-base">🏅</span>
+                    <span className="font-display text-base" style={{ color: C.gold }}>
+                      {a.title}
+                    </span>
+                  </div>
+                  {a.player && (
+                    <div className="text-sm font-semibold mb-1" style={{ color: C.lime }}>
+                      {a.player}
+                    </div>
+                  )}
+                  <p className="text-xs leading-relaxed" style={{ color: C.text }}>
+                    {a.blurb}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
         </Card>
       )}
     </div>
@@ -1629,6 +1767,9 @@ function GameFinderTab({ players, courses, setRounds, setEditingRoundId, setActi
 function PlayersTab({ settings, players, setPlayers }) {
   const [form, setForm] = useState({ name: '', ghin: '', handicap: '', team: 'team1' });
   const [showGhinInfo, setShowGhinInfo] = useState(false);
+  const [aiTeams, setAiTeams] = useState(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState('');
 
   function addPlayer() {
     if (!form.name.trim()) return;
@@ -1640,6 +1781,47 @@ function PlayersTab({ settings, players, setPlayers }) {
   }
   function removePlayer(id) {
     setPlayers((ps) => ps.filter((p) => p.id !== id));
+  }
+
+  async function suggestTeams() {
+    setAiError('');
+    setAiTeams(null);
+    if (players.length < 2) {
+      setAiError('Add at least 2 players first.');
+      return;
+    }
+    setAiLoading(true);
+    const list = players.map((p) => `${p.name} (handicap ${p.handicap})`).join(', ');
+    const prompt = `You are helping split a golf league roster into two balanced teams for a season-long team competition, based on handicap (lower handicap = better player).
+Players: ${list}.
+Split them into "team1" and "team2" so the two sides are as evenly matched as possible by skill (balance the average handicap on each side). Team sizes should differ by at most 1. Every player must be used exactly once, using their exact full name as given above.
+Respond with ONLY this JSON shape, no other text: {"team1": ["Full Name", ...], "team2": ["Full Name", ...], "explanation": "one upbeat sentence explaining the split"}`;
+    const res = await callGeminiJSON(prompt);
+    setAiLoading(false);
+    if (!res.ok) {
+      setAiError(res.error);
+      return;
+    }
+    const t1 = Array.isArray(res.data.team1) ? res.data.team1 : [];
+    const t2 = Array.isArray(res.data.team2) ? res.data.team2 : [];
+    const covered = new Set([...t1, ...t2]);
+    const missing = players.filter((p) => !covered.has(p.name));
+    if (missing.length > 0 || t1.length + t2.length !== players.length) {
+      setAiError("That didn't quite match your roster — give it another tap to retry.");
+      return;
+    }
+    setAiTeams({ team1: t1, team2: t2, explanation: res.data.explanation || '' });
+  }
+  function applyAiTeams() {
+    if (!aiTeams) return;
+    const t1set = new Set(aiTeams.team1);
+    setPlayers((ps) => ps.map((p) => ({ ...p, team: t1set.has(p.name) ? 'team1' : 'team2' })));
+    setAiTeams(null);
+  }
+  function avgHandicap(names) {
+    const list = players.filter((p) => names.includes(p.name));
+    if (list.length === 0) return 0;
+    return Math.round((list.reduce((s, p) => s + p.handicap, 0) / list.length) * 10) / 10;
   }
 
   return (
@@ -1740,6 +1922,66 @@ function PlayersTab({ settings, players, setPlayers }) {
             )}
           </div>
         </div>
+      </Card>
+
+      <Card>
+        <div className="flex items-center justify-between mb-1">
+          <div className="font-display text-xl" style={{ color: C.text }}>
+            🤖 Balanced Teams
+          </div>
+        </div>
+        <p className="text-xs mb-3" style={{ color: C.muted }}>
+          Let AI split the roster into two evenly matched teams by handicap for the season Team Battle.
+        </p>
+        <PrimaryButton onClick={suggestTeams} disabled={aiLoading} style={{ width: '100%', textAlign: 'center' }}>
+          {aiLoading ? 'Thinking…' : '✨ Suggest Balanced Teams'}
+        </PrimaryButton>
+        {aiError && (
+          <div className="text-xs mt-2" style={{ color: C.red }}>
+            {aiError}
+          </div>
+        )}
+        <Collapse open={!!aiTeams}>
+          {aiTeams && (
+            <div className="mt-3 pop-in">
+              <div className="grid grid-cols-2 gap-2 mb-2">
+                <div className="rounded-2xl p-3" style={{ background: C.surface2 }}>
+                  <div className="text-[10px] uppercase tracking-wide mb-1" style={{ color: C.cyan }}>
+                    {settings.team1Name} · avg {avgHandicap(aiTeams.team1)}
+                  </div>
+                  {aiTeams.team1.map((n) => (
+                    <div key={n} className="text-sm" style={{ color: C.text }}>
+                      {n}
+                    </div>
+                  ))}
+                </div>
+                <div className="rounded-2xl p-3" style={{ background: C.surface2 }}>
+                  <div className="text-[10px] uppercase tracking-wide mb-1" style={{ color: C.pink }}>
+                    {settings.team2Name} · avg {avgHandicap(aiTeams.team2)}
+                  </div>
+                  {aiTeams.team2.map((n) => (
+                    <div key={n} className="text-sm" style={{ color: C.text }}>
+                      {n}
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {aiTeams.explanation && (
+                <p className="text-xs mb-3 italic" style={{ color: C.muted }}>
+                  "{aiTeams.explanation}"
+                </p>
+              )}
+              <div className="flex gap-2">
+                <GhostButton onClick={() => setAiTeams(null)} style={{ flex: 1, textAlign: 'center' }}>
+                  Dismiss
+                </GhostButton>
+                <PrimaryButton onClick={applyAiTeams} style={{ flex: 1, textAlign: 'center' }}>
+                  Apply Teams
+                </PrimaryButton>
+              </div>
+            </div>
+          )}
+        </Collapse>
       </Card>
     </div>
   );
