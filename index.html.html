@@ -226,10 +226,10 @@ const GAME_LIBRARY = [
   { id: 'quota', name: 'Quota (Dogfight)', min: 3, max: 8, ideal: [4, 5, 6], tags: ['points', 'mixed skill'], blurb: 'Beat your personal points target — your league\'s home format.', rules: 'Each player gets a quota (36 − handicap) and earns Stableford points during the round. Finish is ranked by points over/under your own quota, so a 15-handicap and a 3-handicap compete dead even. This is the same format as your Dogfight League — for a league round, use Rounds & Scores instead.', bet: 'Everyone antes; best +/- vs. quota takes the pot or splits by finish.', scoring: 'quota' },
   { id: 'nines', name: 'Nines (5-3-1)', min: 3, max: 3, ideal: [3], tags: ['per-hole', 'threesome special'], blurb: 'Built for exactly 3 — nine points split every hole.', rules: 'Each hole splits 9 points: 5 for the best score, 3 for second, 1 for worst. Ties split the pool (e.g. two tied for low take 4 each). Everyone stays live on every hole, which is why it\'s the go-to threesome game. Fun variant: an outright birdie win takes 7-1-1.', bet: 'Settle $ per point difference at the end.', scoring: 'nines' },
   { id: 'wolf', name: 'Wolf', min: 3, max: 5, ideal: [4], tags: ['team', 'strategy'], blurb: 'Rotating captain picks a partner after tee shots — or goes lone wolf.', rules: 'The Wolf rotates each hole and tees off last. After watching each drive, the Wolf either picks that player as a partner (2v2, best ball) or passes; passing everyone means going Lone Wolf, 1v3 for double points. Points swing on best ball per side. Variants exist for 3 and 5 players.', bet: 'Common: partner win 2 pts each, lone wolf win 6, lone wolf loss pays the field 2 each. $ per point.', scoring: 'wolf' },
-  { id: 'vegas', name: 'Vegas', min: 4, max: 4, ideal: [4], tags: ['team', 'high stakes'], blurb: '2v2 where scores combine into a two-digit number — huge swings.', rules: 'Teams of two pair (not add) their scores: a 4 and a 5 becomes 45, low number first. Lowest team number wins the difference in points (45 vs 56 = 11 points). If someone makes 10+, their team\'s number flips high-first (10 and 4 = 104). Some groups flip the loser\'s digits on a birdie — brutal.', bet: 'Pick a small $ per point — swings stack up much faster than you expect.', scoring: 'manual' },
-  { id: 'bestball', name: 'Best Ball (Four-Ball)', min: 4, max: 4, ideal: [4], tags: ['team'], blurb: '2v2 — everyone plays their own ball, best score counts per side.', rules: 'Split into two teams. Each player plays their own ball the whole way; the lower of the two scores on each hole counts for the team. Score it as match play or total strokes. Great when skill levels are mixed since a partner can cover your bad hole.', bet: 'One team bet per nine or per match; press when down 2.', scoring: 'manual' },
-  { id: 'altshot', name: 'Alternate Shot (Foursomes)', min: 4, max: 4, ideal: [4], tags: ['team', 'fast'], blurb: '2v2, one ball per team, partners alternate hitting it.', rules: 'Each team plays a single ball, alternating shots, with players alternating tee shots by hole (one takes odds, one evens). Plays fast and puts a premium on not putting your partner in jail. The Ryder Cup format.', bet: 'One match bet; keep it friendly — this game strains partnerships enough already.', scoring: 'manual' },
-  { id: 'chapman', name: 'Chapman (Pinehurst)', min: 4, max: 4, ideal: [4], tags: ['team'], blurb: 'Both partners tee off, swap balls, pick one, alternate in.', rules: 'Both players on a team hit drives, then each hits their partner\'s ball for the second shot. The team then picks the better ball and alternates shots from there until holed. A best-of-both mix of scramble and alternate shot.', bet: 'Match play bet between the two teams.', scoring: 'manual' },
+  { id: 'vegas', name: 'Vegas', min: 4, max: 4, ideal: [4], tags: ['team', 'high stakes'], blurb: '2v2 where scores combine into a two-digit number — huge swings.', rules: 'Teams of two pair (not add) their scores: a 4 and a 5 becomes 45, low number first. Lowest team number wins the difference in points (45 vs 56 = 11 points). If someone makes 10+, their team\'s number flips high-first (10 and 4 = 104). Some groups flip the loser\'s digits on a birdie — brutal.', bet: 'Pick a small $ per point — swings stack up much faster than you expect.', scoring: 'manual' , pairing: true },
+  { id: 'bestball', name: 'Best Ball (Four-Ball)', min: 4, max: 4, ideal: [4], tags: ['team'], blurb: '2v2 — everyone plays their own ball, best score counts per side.', rules: 'Split into two teams. Each player plays their own ball the whole way; the lower of the two scores on each hole counts for the team. Score it as match play or total strokes. Great when skill levels are mixed since a partner can cover your bad hole.', bet: 'One team bet per nine or per match; press when down 2.', scoring: 'manual' , pairing: true },
+  { id: 'altshot', name: 'Alternate Shot (Foursomes)', min: 4, max: 4, ideal: [4], tags: ['team', 'fast'], blurb: '2v2, one ball per team, partners alternate hitting it.', rules: 'Each team plays a single ball, alternating shots, with players alternating tee shots by hole (one takes odds, one evens). Plays fast and puts a premium on not putting your partner in jail. The Ryder Cup format.', bet: 'One match bet; keep it friendly — this game strains partnerships enough already.', scoring: 'manual' , pairing: true },
+  { id: 'chapman', name: 'Chapman (Pinehurst)', min: 4, max: 4, ideal: [4], tags: ['team'], blurb: 'Both partners tee off, swap balls, pick one, alternate in.', rules: 'Both players on a team hit drives, then each hits their partner\'s ball for the second shot. The team then picks the better ball and alternates shots from there until holed. A best-of-both mix of scramble and alternate shot.', bet: 'Match play bet between the two teams.', scoring: 'manual' , pairing: true },
   { id: 'sixes', name: 'Sixes (Hollywood)', min: 4, max: 4, ideal: [4], tags: ['team', 'rotating'], blurb: '2v2 with partners rotating every six holes — everyone partners everyone.', rules: 'Play three six-hole matches, switching partners each time so all three pairings happen. Score each six-hole segment as its own best-ball match. Nobody gets stuck with (or carried by) the same partner all day.', bet: 'Each six-hole match is its own bet; points or $ per match won.', scoring: 'manual' },
   { id: 'scramble', name: 'Scramble', min: 2, max: 8, ideal: [4], tags: ['team', 'casual', 'mixed skill'], blurb: 'Everyone hits, play the best one, repeat. Pure fun.', rules: 'All players tee off, the team picks the best ball, and everyone plays their next shot from that spot — repeat into the hole. The classic outing format because every skill level contributes and scores are low.', bet: 'Team vs team if you have 4+; otherwise chase a target score.', scoring: 'manual' },
   { id: 'shamble', name: 'Shamble', min: 4, max: 8, ideal: [4], tags: ['team', 'casual'], blurb: 'Scramble off the tee, then play your own ball in.', rules: 'Everyone tees off and the team picks the best drive — then each player plays their own ball from there into the hole, with the best individual score(s) counting. More individual golf than a scramble while still forgiving bad drives.', bet: 'Count one or two best balls per team per hole.', scoring: 'manual' },
@@ -1573,21 +1573,88 @@ function GameFinderTab({ players, courses, setRounds, setEditingRoundId, setActi
   const [guests, setGuests] = useState(0);
   const [expandedId, setExpandedId] = useState(null);
   const [selectedGameId, setSelectedGameId] = useState(null);
+  const [pairing, setPairing] = useState(null);
+  const [pairingLoading, setPairingLoading] = useState(false);
+  const [pairingError, setPairingError] = useState('');
 
   const n = selectedIds.length + guests;
   const selectedGame = GAME_LIBRARY.find((g) => g.id === selectedGameId) || null;
+  const pairingEligible = selectedGame?.pairing && selectedIds.length === 4;
 
   function toggle(id) {
     setSelectedIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
+    setPairing(null);
   }
   function selectGame(id) {
     setSelectedGameId((cur) => (cur === id ? null : id));
     setExpandedId(id);
+    setPairing(null);
+  }
+
+  async function suggestPairing() {
+    setPairingError('');
+    setPairing(null);
+    if (!pairingEligible) return;
+    setPairingLoading(true);
+    const four = players.filter((p) => selectedIds.includes(p.id));
+    const list = four.map((p) => `${p.name} (handicap ${p.handicap})`).join(', ');
+    const prompt = `Four golfers are about to play "${selectedGame.name}" — ${selectedGame.rules}
+Players: ${list}.
+Suggest which 2 should partner against the other 2, using real strategy for this specific format (for example: in Best Ball a strong+weak pairing often covers bad holes well; in Alternate Shot or Chapman, similar-skill partners often reduces friction since shots alternate; adjust your reasoning to fit "${selectedGame.name}" specifically). Every player must be used exactly once, using their exact full name as given above.
+Respond with ONLY this JSON: {"team1": ["Full Name", "Full Name"], "team2": ["Full Name", "Full Name"], "reasoning": "1-2 sentences explaining the strategy for this pairing in this specific format"}`;
+    const res = await callGeminiJSON(prompt);
+    setPairingLoading(false);
+    if (!res.ok) {
+      setPairingError(res.error);
+      return;
+    }
+    const t1 = Array.isArray(res.data.team1) ? res.data.team1 : [];
+    const t2 = Array.isArray(res.data.team2) ? res.data.team2 : [];
+    const covered = new Set([...t1, ...t2]);
+    if (t1.length !== 2 || t2.length !== 2 || four.some((p) => !covered.has(p.name))) {
+      setPairingError("That didn't quite match your foursome — give it another tap to retry.");
+      return;
+    }
+    const course = courses[0];
+    const tee = course.tees[0];
+    const fakeRound = { teeName: tee.name, holes: 18 };
+    const chOf = (name) => {
+      const p = four.find((pp) => pp.name === name);
+      return courseHandicapFor(fakeRound, p, course);
+    };
+    const t1ch = Math.round(((chOf(t1[0]) + chOf(t1[1])) / 2) * 10) / 10;
+    const t2ch = Math.round(((chOf(t2[0]) + chOf(t2[1])) / 2) * 10) / 10;
+    const diff = Math.round(Math.abs(t1ch - t2ch));
+    const strokesTeam1 = t1ch > t2ch ? diff : 0;
+    const strokesTeam2 = t2ch > t1ch ? diff : 0;
+    setPairing({
+      team1: t1,
+      team2: t2,
+      team1Ids: t1.map((name) => four.find((p) => p.name === name).id),
+      team2Ids: t2.map((name) => four.find((p) => p.name === name).id),
+      t1ch,
+      t2ch,
+      strokesTeam1,
+      strokesTeam2,
+      reasoning: res.data.reasoning || '',
+    });
   }
 
   function beginCasualRound() {
     if (selectedIds.length === 0) return;
     const course = courses[0];
+    const gameData = {};
+    if (pairing && pairingEligible) {
+      gameData.pairing = {
+        team1: pairing.team1,
+        team2: pairing.team2,
+        team1Ids: pairing.team1Ids,
+        team2Ids: pairing.team2Ids,
+        strokesTeam1: pairing.strokesTeam1,
+        strokesTeam2: pairing.strokesTeam2,
+        reasoning: pairing.reasoning,
+      };
+    }
     const r = {
       id: uid(),
       date: new Date().toISOString().slice(0, 10),
@@ -1604,7 +1671,7 @@ function GameFinderTab({ players, courses, setRounds, setEditingRoundId, setActi
       pointsBasis: 'gross',
       casual: true,
       gameId: selectedGameId,
-      gameData: {},
+      gameData,
     };
     setRounds((rs) => [r, ...rs]);
     setEditingRoundId(r.id);
@@ -1728,6 +1795,74 @@ function GameFinderTab({ players, courses, setRounds, setEditingRoundId, setActi
             </span>
           </div>
         )}
+
+        {pairingEligible && (
+          <div className="rounded-2xl p-3 mb-3" style={{ background: C.surface2 }}>
+            <div className="font-display text-base mb-1" style={{ color: C.text }}>
+              🤖 Pairings for {selectedGame.name}
+            </div>
+            <p className="text-xs mb-2" style={{ color: C.muted }}>
+              AI suggests who partners with whom, plus whether one side needs extra strokes to even it out.
+            </p>
+            <GhostButton onClick={suggestPairing} color={C.lime} style={{ width: '100%', textAlign: 'center' }}>
+              {pairingLoading ? 'Thinking…' : pairing ? '✨ Re-suggest Pairings' : '✨ Suggest Pairings'}
+            </GhostButton>
+            {pairingError && (
+              <div className="text-xs mt-2" style={{ color: C.red }}>
+                {pairingError}
+              </div>
+            )}
+            <Collapse open={!!pairing}>
+              {pairing && (
+                <div className="mt-3 pop-in">
+                  <div className="grid grid-cols-2 gap-2 mb-2">
+                    <div className="rounded-xl p-2.5" style={{ background: C.surface3 }}>
+                      <div className="text-[10px] uppercase tracking-wide mb-1" style={{ color: C.cyan }}>
+                        Team A · avg CH {pairing.t1ch}
+                      </div>
+                      {pairing.team1.map((n) => (
+                        <div key={n} className="text-sm" style={{ color: C.text }}>
+                          {n}
+                        </div>
+                      ))}
+                      {pairing.strokesTeam1 > 0 && (
+                        <div className="text-[11px] mt-1 font-semibold" style={{ color: C.gold }}>
+                          +{pairing.strokesTeam1} stroke{pairing.strokesTeam1 > 1 ? 's' : ''}
+                        </div>
+                      )}
+                    </div>
+                    <div className="rounded-xl p-2.5" style={{ background: C.surface3 }}>
+                      <div className="text-[10px] uppercase tracking-wide mb-1" style={{ color: C.pink }}>
+                        Team B · avg CH {pairing.t2ch}
+                      </div>
+                      {pairing.team2.map((n) => (
+                        <div key={n} className="text-sm" style={{ color: C.text }}>
+                          {n}
+                        </div>
+                      ))}
+                      {pairing.strokesTeam2 > 0 && (
+                        <div className="text-[11px] mt-1 font-semibold" style={{ color: C.gold }}>
+                          +{pairing.strokesTeam2} stroke{pairing.strokesTeam2 > 1 ? 's' : ''}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  {pairing.strokesTeam1 === 0 && pairing.strokesTeam2 === 0 && (
+                    <div className="text-[11px] mb-2" style={{ color: C.faint }}>
+                      Dead even on course handicap — no strokes needed.
+                    </div>
+                  )}
+                  {pairing.reasoning && (
+                    <p className="text-xs italic" style={{ color: C.muted }}>
+                      "{pairing.reasoning}"
+                    </p>
+                  )}
+                </div>
+              )}
+            </Collapse>
+          </div>
+        )}
+
         <PrimaryButton onClick={beginCasualRound} disabled={selectedIds.length === 0} style={{ width: '100%', textAlign: 'center' }}>
           ▶ Begin Round
         </PrimaryButton>
@@ -2330,6 +2465,7 @@ function GameScoreboardCard({ settings, round, course, players, patchGameData, r
 
   // manual tally — for formats without a dedicated automatic engine
   const tally = round.gameData?.manualTally || {};
+  const pairing = round.gameData?.pairing || null;
   function bumpTally(playerId, delta) {
     patchGameData(round.id, { manualTally: { ...tally, [playerId]: (tally[playerId] || 0) + delta } });
   }
@@ -2339,6 +2475,35 @@ function GameScoreboardCard({ settings, round, course, players, patchGameData, r
       <div className="font-display text-lg mb-1" style={{ color: C.text }}>
         {game ? `${game.name} — Manual Tally` : 'Manual Tally'}
       </div>
+      {pairing && (
+        <div className="rounded-2xl p-3 mb-3" style={{ background: C.surface2 }}>
+          <div className="text-[10px] uppercase tracking-wide mb-2" style={{ color: C.lime }}>
+            🤖 AI Pairings
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <div className="text-[10px] uppercase" style={{ color: C.cyan }}>
+                Team A{pairing.strokesTeam1 > 0 ? ` (+${pairing.strokesTeam1})` : ''}
+              </div>
+              {pairing.team1.map((n) => (
+                <div key={n} className="text-sm" style={{ color: C.text }}>
+                  {n}
+                </div>
+              ))}
+            </div>
+            <div>
+              <div className="text-[10px] uppercase" style={{ color: C.pink }}>
+                Team B{pairing.strokesTeam2 > 0 ? ` (+${pairing.strokesTeam2})` : ''}
+              </div>
+              {pairing.team2.map((n) => (
+                <div key={n} className="text-sm" style={{ color: C.text }}>
+                  {n}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
       {!readOnly && (
         <p className="text-xs mb-2" style={{ color: C.muted }}>
           No automatic engine for this format yet — tap +/− to track it by hand as you play. Check "Rules" above for how to score it.
