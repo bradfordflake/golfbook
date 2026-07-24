@@ -13,9 +13,7 @@
 <script type="module">
   import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js';
   import { getAI, getGenerativeModel, GoogleAIBackend } from 'https://www.gstatic.com/firebasejs/12.16.0/firebase-ai.js';
-
   window.dflAI = { ready: false, error: null };
-
   const AI_FIREBASE_CONFIG = {
     apiKey: "AIzaSyCEUwoGcIFsioaYXplXiR-w8NC5mJzRNCI",
     authDomain: "golf-book-bc3b2.firebaseapp.com",
@@ -25,7 +23,6 @@
     appId: "1:336792673125:web:e94c56a971b4da5b8fdf8c",
     measurementId: "G-R3Y37SYT02"
   };
-
   try {
     const aiApp = initializeApp(AI_FIREBASE_CONFIG, 'dfl-ai-app');
     const ai = getAI(aiApp, { backend: new GoogleAIBackend() });
@@ -52,27 +49,13 @@
 <div id="root"></div>
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useRef } = React;
-
-// ---- storage shim: mirrors the Claude-artifact window.storage API, backed by localStorage ----
 window.storage = {
   async get(key) {
-    try {
-      const v = localStorage.getItem('dfl:' + key);
-      if (v == null) return null;
-      return { key, value: v };
-    } catch (e) { return null; }
+    try { const v = localStorage.getItem('dfl:' + key); if (v == null) return null; return { key, value: v }; } catch (e) { return null; }
   },
-  async set(key, value) {
-    try { localStorage.setItem('dfl:' + key, value); } catch (e) {}
-    return { key, value };
-  },
-  async delete(key) {
-    try { localStorage.removeItem('dfl:' + key); } catch (e) {}
-    return { key, deleted: true };
-  },
+  async set(key, value) { try { localStorage.setItem('dfl:' + key, value); } catch (e) {} return { key, value }; },
+  async delete(key) { try { localStorage.removeItem('dfl:' + key); } catch (e) {} return { key, deleted: true }; },
 };
-
-// ---- minimal inline icon set (standalone replacement for lucide-react) ----
 function Icon({ children, size = 20, style, ...props }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style} {...props}>
@@ -88,26 +71,48 @@ const RotateCcw = (p) => <Icon {...p}><path d="M3 12a9 9 0 1 0 3-6.7" /><polylin
 const Info = (p) => <Icon {...p}><circle cx="12" cy="12" r="10" /><line x1="12" y1="16" x2="12" y2="12" /><line x1="12" y1="8" x2="12.01" y2="8" /></Icon>;
 const Check = (p) => <Icon {...p}><polyline points="20 6 9 17 4 12" /></Icon>;
 
-// ==== app code (same logic as the in-chat version) ====
-
 
 // ---------- colors ----------
-const C = {
-  black: '#000000',
-  surface: '#0D0D10',
-  surface2: '#18181C',
-  surface3: '#141418',
-  border: '#232328',
-  text: '#F2F2F4',
-  muted: '#8E8E96',
-  faint: '#4A4A50',
-  lime: '#B4FF39',
-  gold: '#FFD60A',
-  cyan: '#22D3EE',
-  pink: '#FF4D8D',
-  red: '#FF453A',
-  orange: '#FF9F0A',
+const THEMES = {
+  dark: {
+    black: '#000000',
+    surface: '#101014',
+    surface2: '#1C1C22',
+    surface3: '#16161B',
+    border: '#33333C',
+    text: '#FFFFFF',
+    muted: '#A8A8B2',
+    faint: '#6B6B76',
+    lime: '#C6FF3D',
+    onAccent: '#000000',
+    gold: '#FFD60A',
+    cyan: '#22D3EE',
+    pink: '#FF4D8D',
+    red: '#FF453A',
+    orange: '#FF9F0A',
+  },
+  light: {
+    black: '#F4F6F4',
+    surface: '#FFFFFF',
+    surface2: '#EDF1ED',
+    surface3: '#E6EBE6',
+    border: '#DBE1DB',
+    text: '#15201A',
+    muted: '#5B665F',
+    faint: '#93A099',
+    lime: '#1F7A45',
+    onAccent: '#FFFFFF',
+    gold: '#B07E00',
+    cyan: '#0E7C90',
+    pink: '#C42B7A',
+    red: '#D62828',
+    orange: '#B85C10',
+  },
 };
+const C = { ...THEMES.dark };
+function applyTheme(name) {
+  Object.assign(C, THEMES[name === 'light' ? 'light' : 'dark']);
+}
 const STORAGE_KEY = 'dogfight-league';
 const CLOUD_CONFIG_KEY = 'dfl:cloud-config';
 
@@ -748,7 +753,7 @@ function Toggle2({ value, options, onChange }) {
           key={o.value}
           onClick={() => onChange(o.value)}
           className="flex-1 py-2 rounded-full text-xs font-bold"
-          style={{ background: value === o.value ? C.lime : 'transparent', color: value === o.value ? '#000' : C.muted, transition: 'background-color 0.2s ease, color 0.2s ease' }}
+          style={{ background: value === o.value ? C.lime : 'transparent', color: value === o.value ? C.onAccent : C.muted, transition: 'background-color 0.2s ease, color 0.2s ease' }}
         >
           {o.label}
         </button>
@@ -762,7 +767,7 @@ function PrimaryButton({ children, onClick, disabled, style }) {
       onClick={onClick}
       disabled={disabled}
       className="px-4 py-2.5 rounded-2xl text-sm font-bold"
-      style={{ background: disabled ? C.surface2 : C.lime, color: disabled ? C.faint : '#000', ...style }}
+      style={{ background: disabled ? C.surface2 : C.lime, color: disabled ? C.faint : C.onAccent, ...style }}
     >
       {children}
     </button>
@@ -1450,7 +1455,7 @@ function CalendarTab({ players, availability, setAvailability }) {
                 key={p.id}
                 onClick={() => toggleAvail(selectedDay, p.id, session)}
                 className="px-3 py-1.5 rounded-full text-xs font-semibold tap"
-                style={{ background: on ? C.lime : C.surface2, color: on ? '#000' : C.muted, transition: 'background-color 0.2s ease, color 0.2s ease, transform 0.12s ease' }}
+                style={{ background: on ? C.lime : C.surface2, color: on ? C.onAccent : C.muted, transition: 'background-color 0.2s ease, color 0.2s ease, transform 0.12s ease' }}
               >
                 {p.name.split(/\s+/)[0]}
               </button>
@@ -1503,13 +1508,13 @@ function CalendarTab({ players, availability, setAvailability }) {
                   transition: 'background-color 0.2s ease, border-color 0.2s ease, transform 0.12s ease',
                 }}
               >
-                <span className="font-display text-sm leading-none" style={{ color: isSelected ? '#000' : C.text, transition: 'color 0.2s ease' }}>
+                <span className="font-display text-sm leading-none" style={{ color: isSelected ? C.onAccent : C.text, transition: 'color 0.2s ease' }}>
                   {d}
                 </span>
                 {(am > 0 || pm > 0) && (
                   <span className="flex gap-0.5 mt-1">
-                    {am > 0 && <span className="w-1.5 h-1.5 rounded-full" style={{ background: isSelected ? '#000' : C.lime }} />}
-                    {pm > 0 && <span className="w-1.5 h-1.5 rounded-full" style={{ background: isSelected ? '#000' : C.gold }} />}
+                    {am > 0 && <span className="w-1.5 h-1.5 rounded-full" style={{ background: isSelected ? C.onAccent : C.lime }} />}
+                    {pm > 0 && <span className="w-1.5 h-1.5 rounded-full" style={{ background: isSelected ? C.onAccent : C.gold }} />}
                   </span>
                 )}
               </button>
@@ -1741,7 +1746,7 @@ Respond with ONLY this JSON: {"team1": ["Full Name", "Full Name"], "team2": ["Fu
               <button
                 onClick={() => selectGame(g.id)}
                 className="w-full py-2 rounded-xl text-xs font-bold text-center tap"
-                style={{ background: selected ? C.surface2 : C.lime, color: selected ? C.text : '#000' }}
+                style={{ background: selected ? C.surface2 : C.lime, color: selected ? C.text : C.onAccent }}
               >
                 {selected ? '✓ Selected for this round — tap to unselect' : `Play ${g.name}`}
               </button>
@@ -2168,7 +2173,7 @@ function WolfPicker({ players, holeIdx, pick, onChange }) {
             key={p.id}
             onClick={() => onChange({ wolf: p.id, partner: null, lone: false })}
             className="px-3 py-1.5 rounded-full text-xs font-semibold"
-            style={{ background: wolfId === p.id ? C.lime : C.surface2, color: wolfId === p.id ? '#000' : C.muted }}
+            style={{ background: wolfId === p.id ? C.lime : C.surface2, color: wolfId === p.id ? C.onAccent : C.muted }}
           >
             {p.name}
           </button>
@@ -2183,7 +2188,7 @@ function WolfPicker({ players, holeIdx, pick, onChange }) {
             key={p.id}
             onClick={() => onChange({ wolf: wolfId, partner: p.id, lone: false })}
             className="px-3 py-1.5 rounded-full text-xs font-semibold"
-            style={{ background: pick?.partner === p.id ? C.lime : C.surface2, color: pick?.partner === p.id ? '#000' : C.muted }}
+            style={{ background: pick?.partner === p.id ? C.lime : C.surface2, color: pick?.partner === p.id ? C.onAccent : C.muted }}
           >
             {p.name}
           </button>
@@ -2191,7 +2196,7 @@ function WolfPicker({ players, holeIdx, pick, onChange }) {
         <button
           onClick={() => onChange({ wolf: wolfId, partner: null, lone: true })}
           className="px-3 py-1.5 rounded-full text-xs font-semibold"
-          style={{ background: pick?.lone ? C.pink : C.surface2, color: pick?.lone ? '#000' : C.muted }}
+          style={{ background: pick?.lone ? C.pink : C.surface2, color: pick?.lone ? C.onAccent : C.muted }}
         >
           Go it alone
         </button>
@@ -2218,7 +2223,7 @@ function BBBPicker({ players, pick, onChange }) {
                 key={p.id}
                 onClick={() => onChange({ ...pick, [r.key]: pick?.[r.key] === p.id ? null : p.id })}
                 className="px-3 py-1.5 rounded-full text-xs font-semibold"
-                style={{ background: pick?.[r.key] === p.id ? C.lime : C.surface2, color: pick?.[r.key] === p.id ? '#000' : C.muted }}
+                style={{ background: pick?.[r.key] === p.id ? C.lime : C.surface2, color: pick?.[r.key] === p.id ? C.onAccent : C.muted }}
               >
                 {p.name}
               </button>
@@ -2246,25 +2251,36 @@ function GameScoreboardCard({ settings, round, course, players, patchGameData, r
       .sort((a, b) => (b.res ? b.res.result : -999) - (a.res ? a.res.result : -999));
     return (
       <Card>
-        <div className="font-display text-lg mb-2" style={{ color: C.text }}>
-          {readOnly ? 'Final Standings' : 'Live Standings'}
+        <div className="flex items-center justify-between mb-2">
+          <div className="font-display text-lg" style={{ color: C.text }}>
+            {readOnly ? 'Final Standings' : 'Live Standings'}
+          </div>
         </div>
         {board.map(({ p, res, thru }, i) => (
-          <div key={p.id} className="flex items-center justify-between py-2" style={{ borderBottom: `1px solid ${C.border}` }}>
+          <div key={p.id} className="flex items-center justify-between py-2.5" style={{ borderBottom: `1px solid ${C.border}` }}>
             <div className="flex items-center gap-2 min-w-0">
-              <span className="font-display text-xs w-4" style={{ color: i === 0 && res ? C.gold : C.faint }}>
-                {i + 1}
-              </span>
-              <span className="text-sm truncate" style={{ color: i === 0 && res ? C.text : C.muted, fontWeight: i === 0 && res ? 700 : 500 }}>
+              {i === 0 && res ? (
+                <span className="w-5 text-center" style={{ fontSize: 14 }}>
+                  🏆
+                </span>
+              ) : (
+                <span className="font-display text-sm w-5 text-center" style={{ color: C.faint }}>
+                  {i + 1}
+                </span>
+              )}
+              <span className="text-sm truncate" style={{ color: i === 0 && res ? C.text : C.text, fontWeight: i === 0 && res ? 700 : 600 }}>
                 {p.name}
               </span>
             </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <span className="text-[10px]" style={{ color: C.faint }}>
-                {res ? `${res.points} pts · q${res.quota} · thru ${thru}` : 'no scores'}
+            <div className="flex items-center gap-3 shrink-0">
+              <span className="text-[11px] font-medium" style={{ color: C.muted }}>
+                {res ? `${res.points} pts · q${res.quota}` : 'no scores'}
               </span>
-              <span className="font-display text-base w-10 text-right" style={{ color: res ? (res.result >= 0 ? C.lime : C.red) : C.faint }}>
+              <span className="font-display text-lg w-10 text-right" style={{ color: res ? (res.result >= 0 ? C.lime : C.red) : C.faint }}>
                 {res ? (res.result >= 0 ? '+' : '') + res.result : '–'}
+              </span>
+              <span className="font-display text-xs w-6 text-right" style={{ color: C.muted }}>
+                {thru}
               </span>
             </div>
           </div>
@@ -2526,7 +2542,7 @@ function GameScoreboardCard({ settings, round, course, players, patchGameData, r
               <span className="w-8 text-center font-display text-base" style={{ color: C.text }}>
                 {v}
               </span>
-              <button onClick={() => bumpTally(p.id, 1)} className="w-7 h-7 rounded-full flex items-center justify-center" style={{ background: C.lime, color: '#000' }}>
+              <button onClick={() => bumpTally(p.id, 1)} className="w-7 h-7 rounded-full flex items-center justify-center" style={{ background: C.lime, color: C.onAccent }}>
                 <Plus size={12} />
               </button>
             </div>
@@ -2594,7 +2610,7 @@ function LiveScoring({ settings, round, players, course, patchRound, setHoleScor
                   key={v}
                   onClick={() => patchRound(round.id, { pointsBasis: v })}
                   className="px-3 py-1 rounded-full text-[11px] font-bold uppercase"
-                  style={{ background: (round.pointsBasis || 'gross') === v ? C.lime : 'transparent', color: (round.pointsBasis || 'gross') === v ? '#000' : C.muted }}
+                  style={{ background: (round.pointsBasis || 'gross') === v ? C.lime : 'transparent', color: (round.pointsBasis || 'gross') === v ? C.onAccent : C.muted }}
                 >
                   {v}
                 </button>
@@ -2641,40 +2657,64 @@ function LiveScoring({ settings, round, players, course, patchRound, setHoleScor
         </div>
       )}
 
-      {/* hole strip */}
-      <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
-        {holes.map((h, i) => {
-          const done = activePlayers.length > 0 && activePlayers.every((p) => round.playerData[p.id]?.holeScores?.[i] != null);
-          return (
-            <button
-              key={i}
-              onClick={() => setHole(i)}
-              className="shrink-0 w-9 h-9 rounded-full flex items-center justify-center font-display text-sm tap"
-              style={{
-                background: i === holeIdx ? C.lime : done ? C.surface3 : C.surface2,
-                color: i === holeIdx ? '#000' : done ? C.lime : C.muted,
-                border: done && i !== holeIdx ? `1px solid ${C.lime}` : '1px solid transparent',
-                transform: i === holeIdx ? 'scale(1.1)' : 'scale(1)',
-                transition: 'transform 0.2s cubic-bezier(0.34,1.56,0.64,1), background-color 0.2s ease, color 0.2s ease',
-              }}
-            >
-              {i + 1}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* hole header */}
-      <div key={holeIdx} className="tab-fade-in">
-        <div className="text-center py-3">
-          <div className="font-display text-3xl leading-none" style={{ color: C.text }}>
-            HOLE {holeIdx + 1}
+      {/* hole header — big number left, par/yardage right (reference style) */}
+      <div className="flex items-end gap-3 mb-3">
+        <div className="font-display leading-none" style={{ color: C.lime, fontSize: 68 }}>
+          {holeIdx + 1}
+        </div>
+        <div className="pb-1">
+          <div className="font-display text-[11px] uppercase tracking-widest" style={{ color: C.lime }}>
+            Hole
           </div>
-          <div className="font-display text-xs mt-1" style={{ color: C.muted }}>
-            PAR {hole.par} · STROKE INDEX {hole.si}
+          <div className="text-sm font-semibold" style={{ color: C.text }}>
+            Par {hole.par} · SI {hole.si}
           </div>
         </div>
+      </div>
 
+      {/* hole strip — boxed tabs with chevron arrows */}
+      <div className="flex items-center gap-1.5 mb-4">
+        <button
+          onClick={() => setHole(Math.max(0, holeIdx - 1))}
+          className="shrink-0 w-9 h-11 rounded-xl flex items-center justify-center tap"
+          style={{ background: C.surface2, color: holeIdx === 0 ? C.faint : C.text, border: `1px solid ${C.border}` }}
+        >
+          ‹
+        </button>
+        <div className="flex gap-1.5 overflow-x-auto scrollbar-hide flex-1">
+          {holes.map((h, i) => {
+            const done = activePlayers.length > 0 && activePlayers.every((p) => round.playerData[p.id]?.holeScores?.[i] != null);
+            const active = i === holeIdx;
+            return (
+              <button
+                key={i}
+                onClick={() => setHole(i)}
+                className="shrink-0 rounded-xl flex items-center justify-center font-display text-base tap"
+                style={{
+                  width: 44,
+                  height: 44,
+                  background: active ? C.lime : C.surface2,
+                  color: active ? C.onAccent : done ? C.lime : C.text,
+                  border: `1px solid ${active ? C.lime : done ? C.lime : C.border}`,
+                  fontWeight: 700,
+                  transition: 'background-color 0.2s ease, color 0.2s ease',
+                }}
+              >
+                {i + 1}
+              </button>
+            );
+          })}
+        </div>
+        <button
+          onClick={() => setHole(Math.min(holes.length - 1, holeIdx + 1))}
+          className="shrink-0 w-9 h-11 rounded-xl flex items-center justify-center tap"
+          style={{ background: C.surface2, color: holeIdx === holes.length - 1 ? C.faint : C.text, border: `1px solid ${C.border}` }}
+        >
+          ›
+        </button>
+      </div>
+
+      <div key={holeIdx} className="tab-fade-in">
         {game?.scoring === 'wolf' && (
           <WolfPicker
             players={activePlayers}
@@ -2691,30 +2731,32 @@ function LiveScoring({ settings, round, players, course, patchRound, setHoleScor
           />
         )}
 
-        {/* score rows */}
+        {/* score rows — larger, higher contrast (reference style) */}
         {activePlayers.map((p) => {
           const strokes = strokesThisHole(round, p, course, holeIdx);
           const gross = round.playerData[p.id]?.holeScores?.[holeIdx];
           const eff = gross != null ? (net ? gross - strokes : gross) : null;
           const pts = eff != null ? stablefordPoints(eff, hole.par) : null;
+          const toPar = gross != null ? gross - hole.par : null;
+          const toParLabel = toPar == null ? '' : toPar === 0 ? 'E' : toPar > 0 ? `+${toPar}` : `${toPar}`;
           return (
-            <div key={p.id} className="rounded-2xl p-3 mb-2" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
-              <div className="flex items-center justify-between">
+            <div key={p.id} className="rounded-2xl p-3 mb-2.5" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
+              <div className="flex items-center justify-between gap-2">
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5">
-                    <span className="font-medium text-sm truncate" style={{ color: C.text }}>
+                    <span className="font-bold text-base truncate" style={{ color: C.text }}>
                       {p.name}
                     </span>
                     {strokes > 0 && (
-                      <span className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold check-pop" style={{ background: 'rgba(180,255,57,0.15)', color: C.lime }}>
-                        {'●'.repeat(Math.min(strokes, 3))} {strokes > 1 ? `+${strokes}` : 'stroke'}
+                      <span className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold check-pop" style={{ background: 'rgba(198,255,61,0.18)', color: C.lime }}>
+                        {'●'.repeat(Math.min(strokes, 3))} {strokes > 1 ? `+${strokes}` : ''}
                       </span>
                     )}
                   </div>
-                  <div className="text-[10px] mt-0.5" style={{ color: C.faint }}>
+                  <div className="text-[11px] mt-0.5 font-medium" style={{ color: C.muted }}>
                     {showDogfightInfo
                       ? pts != null
-                        ? `${pts} pt${pts === 1 ? '' : 's'} this hole${net && strokes > 0 ? ` (net ${eff})` : ''}`
+                        ? `${pts} pt${pts === 1 ? '' : 's'} this hole${net && strokes > 0 ? ` · net ${eff}` : ''}`
                         : strokes > 0
                         ? `Gets ${strokes} stroke${strokes > 1 ? 's' : ''} here`
                         : 'No stroke this hole'
@@ -2723,17 +2765,28 @@ function LiveScoring({ settings, round, players, course, patchRound, setHoleScor
                       : 'No stroke this hole'}
                   </div>
                 </div>
-                <div className="flex items-center gap-3 shrink-0">
-                  <button onClick={() => bump(p.id, -1)} className="w-9 h-9 rounded-full flex items-center justify-center tap" style={{ background: C.surface2, color: C.text }}>
-                    <Minus size={15} />
+                <div className="flex items-center gap-2.5 shrink-0">
+                  <button
+                    onClick={() => bump(p.id, -1)}
+                    className="rounded-xl flex items-center justify-center tap"
+                    style={{ width: 46, height: 46, background: C.surface2, color: C.text, border: `1px solid ${C.border}` }}
+                  >
+                    <Minus size={18} />
                   </button>
-                  <button onClick={() => resetToPar(p.id)} className="w-8 text-center font-display text-xl" style={{ color: gross != null ? C.text : C.faint }}>
-                    <span key={gross ?? 'par'} className="inline-block pop-in">
+                  <button onClick={() => resetToPar(p.id)} className="text-center" style={{ width: 46 }}>
+                    <span key={gross ?? 'par'} className="inline-block font-display pop-in leading-none" style={{ color: C.lime, fontSize: 34, fontWeight: 700 }}>
                       {gross ?? hole.par}
                     </span>
+                    <div className="text-[10px] font-bold leading-none mt-0.5" style={{ color: toPar == null ? C.faint : toPar <= 0 ? C.lime : C.orange }}>
+                      {toParLabel}
+                    </div>
                   </button>
-                  <button onClick={() => bump(p.id, 1)} className="w-9 h-9 rounded-full flex items-center justify-center tap" style={{ background: C.lime, color: '#000' }}>
-                    <Plus size={15} />
+                  <button
+                    onClick={() => bump(p.id, 1)}
+                    className="rounded-xl flex items-center justify-center tap"
+                    style={{ width: 46, height: 46, background: C.lime, color: C.onAccent, border: `1px solid ${C.lime}` }}
+                  >
+                    <Plus size={18} />
                   </button>
                 </div>
               </div>
@@ -2741,25 +2794,35 @@ function LiveScoring({ settings, round, players, course, patchRound, setHoleScor
           );
         })}
       </div>
-      <div className="text-[10px] text-center mb-3" style={{ color: C.faint }}>
+      <div className="text-[11px] text-center mb-3" style={{ color: C.faint }}>
         Defaults to par — tap +/− to adjust, tap the score to reset it
       </div>
 
-      {/* prev / next */}
-      <div className="flex gap-2 mb-4">
-        <GhostButton onClick={() => setHole(Math.max(0, holeIdx - 1))} style={{ flex: 1, textAlign: 'center', opacity: holeIdx === 0 ? 0.4 : 1 }}>
-          ← Hole {Math.max(1, holeIdx)}
-        </GhostButton>
-        {holeIdx < holes.length - 1 ? (
-          <PrimaryButton onClick={() => setHole(holeIdx + 1)} style={{ flex: 1, textAlign: 'center', opacity: allScoredThisHole ? 1 : 0.85 }}>
-            Hole {holeIdx + 2} →
-          </PrimaryButton>
-        ) : (
-          <PrimaryButton onClick={onFinish} style={{ flex: 1, textAlign: 'center' }}>
-            Finish round ✓
-          </PrimaryButton>
-        )}
-      </div>
+      {/* next hole — big full-width lime button (reference style) */}
+      {holeIdx < holes.length - 1 ? (
+        <button
+          onClick={() => setHole(holeIdx + 1)}
+          className="w-full rounded-2xl flex items-center justify-center gap-2 tap mb-2"
+          style={{ background: C.lime, color: C.onAccent, height: 58, fontWeight: 700, fontSize: 18 }}
+        >
+          <span className="font-display tracking-wide">NEXT HOLE {holeIdx + 2}</span>
+          <span style={{ fontSize: 20 }}>→</span>
+        </button>
+      ) : (
+        <button
+          onClick={onFinish}
+          className="w-full rounded-2xl flex items-center justify-center gap-2 tap mb-2"
+          style={{ background: C.lime, color: C.onAccent, height: 58, fontWeight: 700, fontSize: 18 }}
+        >
+          <span className="font-display tracking-wide">FINISH ROUND</span>
+          <span style={{ fontSize: 18 }}>✓</span>
+        </button>
+      )}
+      {holeIdx > 0 && (
+        <button onClick={() => setHole(holeIdx - 1)} className="w-full text-center text-xs font-semibold mb-4 tap" style={{ color: C.muted }}>
+          ← Back to hole {holeIdx}
+        </button>
+      )}
 
       {/* live scoreboard, tailored to the selected game */}
       <GameScoreboardCard settings={settings} round={round} course={course} players={activePlayers} patchGameData={patchGameData} />
@@ -3587,7 +3650,7 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
 }
 
 // ---------- Settings tab ----------
-function SettingsTab({ settings, setSettings, players, setPlayers, courses, rounds, setRounds, availability, setAvailability, cloudStatus, cloudError, cloudLeagueId, aiStatus, aiErrorMsg }) {
+function SettingsTab({ settings, setSettings, players, setPlayers, courses, rounds, setRounds, availability, setAvailability, cloudStatus, cloudError, cloudLeagueId, aiStatus, aiErrorMsg, theme, setTheme }) {
   const fileInputRef = useRef(null);
   function patch(p) {
     setSettings((s) => ({ ...s, ...p }));
@@ -3783,6 +3846,21 @@ function SettingsTab({ settings, setSettings, players, setPlayers, courses, roun
         <InfoNote>All data is saved in this browser only. Use Export to keep a backup or move it to another device. Bookmark this page to find it again.</InfoNote>
       </Card>
 
+      <Card>
+        <SectionLabel>Appearance</SectionLabel>
+        <p className="text-xs mb-2" style={{ color: C.muted }}>
+          Light mode is easier to read in bright sun; dark mode saves battery and is easier on the eyes at night.
+        </p>
+        <Toggle2
+          value={theme}
+          onChange={setTheme}
+          options={[
+            { value: 'dark', label: '🌙 Dark' },
+            { value: 'light', label: '☀️ Light' },
+          ]}
+        />
+      </Card>
+
       {confirmErase && (
         <ConfirmDialog
           title="Erase everything?"
@@ -3900,13 +3978,24 @@ function HowItWorksTab({ settings }) {
 function DogfightLeague() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('standings');
+  const [menuOpen, setMenuOpen] = useState(false);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
+  const [theme, setTheme] = useState('dark');
+
+  // keep the shared color palette in sync with the chosen theme on every render
+  applyTheme(theme);
+
   const [players, setPlayers] = useState(makeDefaultPlayers);
   const [courses] = useState([DEFAULT_COURSE]);
   const [rounds, setRounds] = useState([]);
   const [availability, setAvailability] = useState({});
   const [editingRoundId, setEditingRoundId] = useState(null);
   const saveTimer = useRef(null);
+
+  useEffect(() => {
+    document.body.style.background = C.black;
+    document.documentElement.style.background = C.black;
+  }, [theme]);
 
   const [cloudStatus, setCloudStatus] = useState('disconnected'); // disconnected | connecting | connected | error | unavailable
   const [cloudError, setCloudError] = useState('');
@@ -3954,6 +4043,7 @@ function DogfightLeague() {
           if (data.players) setPlayers(data.players);
           if (data.rounds) setRounds(data.rounds);
           if (data.availability) setAvailability(data.availability);
+          if (data.theme) setTheme(data.theme);
         }
       } catch (e) {}
       setLoading(false);
@@ -4042,7 +4132,7 @@ function DogfightLeague() {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
       try {
-        await window.storage.set(STORAGE_KEY, JSON.stringify({ settings, players, rounds, availability }));
+        await window.storage.set(STORAGE_KEY, JSON.stringify({ settings, players, rounds, availability, theme }));
       } catch (e) {}
 
       if (dbRef.current && cloudStatus === 'connected') {
@@ -4118,7 +4208,7 @@ function DogfightLeague() {
       }
     }, 500);
     return () => clearTimeout(saveTimer.current);
-  }, [settings, players, rounds, availability, loading, cloudStatus, cloudLeagueId]);
+  }, [settings, players, rounds, availability, theme, loading, cloudStatus, cloudLeagueId]);
 
   if (loading) {
     return (
@@ -4131,6 +4221,10 @@ function DogfightLeague() {
     );
   }
 
+  const editingRound = activeTab === 'rounds' ? rounds.find((r) => r.id === editingRoundId) : null;
+  const headerTitle = editingRound ? roundGameLabel(editingRound) : (TABS.find((t) => t.id === activeTab) || {}).label;
+  const headerSub = editingRound ? formatRoundDate(editingRound.date) : null;
+
   return (
     <div style={{ maxWidth: 480, margin: '0 auto', minHeight: '100vh', background: C.black }}>
       <style>{`
@@ -4140,7 +4234,7 @@ function DogfightLeague() {
         .scrollbar-hide::-webkit-scrollbar { display: none; }
         .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
         input::placeholder { color: ${C.faint}; }
-        select { color-scheme: dark; }
+        select { color-scheme: ${theme === 'light' ? 'light' : 'dark'}; }
 
         @keyframes fadeSlideUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
@@ -4177,52 +4271,119 @@ function DogfightLeague() {
         a, button, [role="button"] { -webkit-tap-highlight-color: transparent; }
       `}</style>
       <div className="app-root min-h-screen">
-        <div className="flex items-center gap-3 px-4 pt-6 pb-4">
-          <div className="text-3xl">🏌️</div>
+        <div className="flex items-center gap-3 px-4 pt-6 pb-4" style={{ borderBottom: `1px solid ${C.border}` }}>
+          <div className="text-3xl shrink-0">🏌️</div>
           <div className="flex-1 min-w-0">
-            <div className="font-display text-2xl leading-none" style={{ color: C.text }}>
+            <div className="text-[11px] font-bold uppercase tracking-widest leading-none truncate" style={{ color: C.lime }}>
               {settings.leagueName}
             </div>
-            <div className="text-xs mt-1" style={{ color: C.muted }}>
-              Quota points · Weekly purse · Skins · Season standings
+            <div key={headerTitle} className="font-display text-2xl leading-tight mt-1 truncate pop-in" style={{ color: C.text }}>
+              {headerTitle}
             </div>
+            {headerSub && (
+              <div className="text-[11px] mt-0.5 truncate" style={{ color: C.muted }}>
+                {headerSub}
+              </div>
+            )}
           </div>
+          <span
+            className={`w-2 h-2 rounded-full shrink-0 ${cloudStatus === 'connected' ? 'lime-pulse' : ''}`}
+            title={cloudStatus === 'connected' ? `Synced · ${cloudLeagueId}` : cloudStatus === 'error' ? 'Sync error' : 'Local only'}
+            style={{ background: cloudStatus === 'connected' ? C.lime : cloudStatus === 'error' ? C.red : cloudStatus === 'connecting' ? C.gold : C.faint }}
+          />
           <button
-            onClick={() => setActiveTab('settings')}
-            className="flex items-center gap-1.5 px-2 py-1 rounded-full shrink-0 tap"
+            onClick={() => setMenuOpen(true)}
+            aria-label="Open menu"
+            className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 tap"
             style={{ background: C.surface2 }}
-            title={cloudStatus === 'connected' ? `Synced · ${cloudLeagueId}` : 'Local only'}
           >
-            <span
-              className={`w-2 h-2 rounded-full ${cloudStatus === 'connected' ? 'lime-pulse' : ''}`}
-              style={{
-                background: cloudStatus === 'connected' ? C.lime : cloudStatus === 'error' ? C.red : cloudStatus === 'connecting' ? C.gold : C.faint,
-              }}
-            />
-            <span className="text-[10px] font-semibold" style={{ color: C.muted }}>
-              {cloudStatus === 'connected' ? 'Synced' : cloudStatus === 'connecting' ? 'Syncing…' : cloudStatus === 'error' ? 'Sync error' : 'Local'}
-            </span>
+            <div style={{ width: 18 }}>
+              <div style={{ height: 2, background: C.text, borderRadius: 2, marginBottom: 4 }} />
+              <div style={{ height: 2, background: C.text, borderRadius: 2, marginBottom: 4 }} />
+              <div style={{ height: 2, background: C.text, borderRadius: 2 }} />
+            </div>
           </button>
         </div>
 
-        <div className="flex gap-5 overflow-x-auto px-4 pb-2 scrollbar-hide sticky top-0 z-10" style={{ background: C.black, borderBottom: `1px solid ${C.border}` }}>
-          {TABS.map((t) => (
-            <button
-              key={t.id}
-              onClick={() => {
-                setActiveTab(t.id);
-                if (t.id !== 'rounds') setEditingRoundId(null);
-              }}
-              className="shrink-0 pb-2 text-sm font-semibold whitespace-nowrap"
+        {/* slide-in nav drawer */}
+        <div style={{ position: 'fixed', inset: 0, zIndex: 60, pointerEvents: menuOpen ? 'auto' : 'none' }}>
+          <div
+            onClick={() => setMenuOpen(false)}
+            style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.6)', opacity: menuOpen ? 1 : 0, transition: 'opacity 0.3s ease' }}
+          />
+          <div style={{ position: 'absolute', inset: 0, maxWidth: 480, margin: '0 auto' }}>
+            <div
               style={{
-                color: activeTab === t.id ? C.text : C.muted,
-                borderBottom: activeTab === t.id ? `2px solid ${C.lime}` : '2px solid transparent',
-                transition: 'color 0.2s ease, border-color 0.2s ease',
+                position: 'absolute',
+                top: 0,
+                right: 0,
+                height: '100%',
+                width: '76%',
+                maxWidth: 300,
+                background: C.surface,
+                borderLeft: `1px solid ${C.border}`,
+                transform: menuOpen ? 'translateX(0)' : 'translateX(100%)',
+                transition: 'transform 0.34s cubic-bezier(0.16,1,0.3,1)',
+                boxShadow: menuOpen ? '-24px 0 48px rgba(0,0,0,0.45)' : 'none',
+                display: 'flex',
+                flexDirection: 'column',
               }}
             >
-              {t.label}
-            </button>
-          ))}
+              <div className="flex items-center justify-between px-4 pt-6 pb-4">
+                <span className="font-display text-lg" style={{ color: C.text }}>
+                  Menu
+                </span>
+                <button
+                  onClick={() => setMenuOpen(false)}
+                  aria-label="Close menu"
+                  className="w-9 h-9 rounded-full flex items-center justify-center tap"
+                  style={{ background: C.surface2, color: C.text }}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto px-3 scrollbar-hide">
+                {TABS.map((t, i) => {
+                  const active = activeTab === t.id;
+                  return (
+                    <button
+                      key={t.id}
+                      onClick={() => {
+                        setActiveTab(t.id);
+                        if (t.id !== 'rounds') setEditingRoundId(null);
+                        setMenuOpen(false);
+                      }}
+                      className="w-full flex items-center rounded-2xl px-4 py-3 mb-1 text-left tap"
+                      style={{
+                        background: active ? C.surface2 : 'transparent',
+                        borderLeft: active ? `3px solid ${C.lime}` : '3px solid transparent',
+                        transform: menuOpen ? 'translateX(0)' : 'translateX(12px)',
+                        opacity: menuOpen ? 1 : 0,
+                        transition: `transform 0.3s cubic-bezier(0.16,1,0.3,1) ${0.06 + i * 0.035}s, opacity 0.3s ease ${0.06 + i * 0.035}s, background-color 0.15s ease`,
+                      }}
+                    >
+                      <span className="font-semibold text-[15px]" style={{ color: active ? C.lime : C.text }}>
+                        {t.label}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="px-4 py-4" style={{ borderTop: `1px solid ${C.border}` }}>
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`w-2 h-2 rounded-full ${cloudStatus === 'connected' ? 'lime-pulse' : ''}`}
+                    style={{ background: cloudStatus === 'connected' ? C.lime : cloudStatus === 'error' ? C.red : cloudStatus === 'connecting' ? C.gold : C.faint }}
+                  />
+                  <span className="text-xs font-semibold" style={{ color: C.muted }}>
+                    {cloudStatus === 'connected' ? `Synced · ${cloudLeagueId}` : cloudStatus === 'connecting' ? 'Syncing…' : cloudStatus === 'error' ? 'Sync error' : 'Local only'}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
 
         <div key={activeTab} className="px-4 pt-4 pb-10 tab-fade-in">
@@ -4252,6 +4413,8 @@ function DogfightLeague() {
               cloudLeagueId={cloudLeagueId}
               aiStatus={aiStatus}
               aiErrorMsg={aiErrorMsg}
+              theme={theme}
+              setTheme={setTheme}
             />
           )}
           {activeTab === 'howitworks' && <HowItWorksTab settings={settings} />}
