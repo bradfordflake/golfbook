@@ -171,7 +171,7 @@ function applySparse(base, delta) {
 // Reconciles an incoming cloud snapshot with local state, replaying any
 // not-yet-pushed local edits on top so a snapshot can never silently discard
 // what someone just typed.
-function reconcileFromCloud(localList, incomingList, prevSyncedMap) {
+function reconcileFromCloud(localList, incomingList, prevSyncedMap, knownCloudIds) {
   const localById = {};
   localList.forEach((x) => {
     localById[x.id] = x;
@@ -191,9 +191,22 @@ function reconcileFromCloud(localList, incomingList, prevSyncedMap) {
     const delta = sparseDiff(base, loc);
     return applySparse(inc, delta);
   });
-  // Keep anything created locally that the cloud hasn't seen yet.
+  // Decide what to do with local entries the snapshot doesn't contain. There
+  // are two very different cases and they look identical without prevSyncedMap:
+  //   - never pushed to the cloud  -> a local creation still in flight, keep it
+  //   - previously pushed, now gone -> deleted on another device, honour it
+  // Keeping both (the original bug) meant a deleted round was re-added locally,
+  // then re-uploaded by the next save pass, so deletions bounced back forever.
   localList.forEach((loc) => {
-    if (!incomingIds.has(loc.id)) out.push(loc);
+    if (incomingIds.has(loc.id)) return;
+    // prevSyncedMap is in-memory and empty on a cold start, so it alone can't
+    // tell whether a round was ever in the cloud. knownCloudIds is persisted to
+    // local storage, which lets a device that was closed during the delete
+    // still recognise it instead of re-uploading the round.
+    const wasKnownToCloud =
+      prevSyncedMap[loc.id] !== undefined || (knownCloudIds && knownCloudIds.has(loc.id));
+    if (wasKnownToCloud) return; // remote delete — let it go
+    out.push(loc);
   });
   return out;
 }
@@ -6697,6 +6710,10 @@ function DogfightLeague() {
   // listener fires before the rounds state commits) could delete real rounds
   // outright. Never infer destruction from absence.
   const prevLocalRef = useRef(null);
+  // Round ids the cloud is known to hold. Persisted to local storage so that a
+  // device which was closed when another device deleted a round can tell the
+  // difference between "deleted remotely" and "created here, not yet uploaded".
+  const knownCloudRoundIdsRef = useRef(new Set());
   // False until the first players snapshot has come back from Firestore. The
   // upward sync must not run before this: on a cold load, state still holds the
   // freshly seeded default roster and lastSyncedRef is empty, so the debounced
@@ -6744,6 +6761,7 @@ function DogfightLeague() {
           if (data.rounds) setRounds(data.rounds);
           if (data.availability) setAvailability(data.availability);
           if (data.theme) setTheme(data.theme);
+          if (Array.isArray(data.syncedRoundIds)) knownCloudRoundIdsRef.current = new Set(data.syncedRoundIds);
         }
       } catch (e) {}
       setLoading(false);
@@ -6844,10 +6862,13 @@ function DogfightLeague() {
         // can work out which local edits haven't reached the cloud yet.
         const prevSynced = lastSyncedRef.current.rounds;
         lastSyncedRef.current.rounds = map;
+        const knownIds = knownCloudRoundIdsRef.current;
+        // The snapshot is authoritative for what the cloud currently holds.
+        knownCloudRoundIdsRef.current = new Set(Object.keys(map));
         // Replay unsaved local edits on top of the snapshot. Without this, a
         // snapshot arriving mid-entry would wipe the score someone just typed
         // before their own debounced write had a chance to push it.
-        setRounds((cur) => reconcileFromCloud(cur, arr, prevSynced));
+        setRounds((cur) => reconcileFromCloud(cur, arr, prevSynced, knownIds));
       }, onErr);
 
       const unsub3 = base.collection('availability').onSnapshot((snap) => {
@@ -6916,7 +6937,17 @@ function DogfightLeague() {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
       try {
-        await window.storage.set(STORAGE_KEY, JSON.stringify({ settings, players, rounds, availability, theme }));
+        await window.storage.set(
+          STORAGE_KEY,
+          JSON.stringify({
+            settings,
+            players,
+            rounds,
+            availability,
+            theme,
+            syncedRoundIds: Array.from(knownCloudRoundIdsRef.current),
+          })
+        );
       } catch (e) {}
 
       if (dbRef.current && cloudStatus === 'connected' && cloudHydratedRef.current) {
@@ -6961,6 +6992,7 @@ function DogfightLeague() {
               // playerData/trash/gameData untouched in the cloud.
               batch.set(base.collection('rounds').doc(r.id), r, { merge: true });
               lastSyncedRef.current.rounds[r.id] = j;
+              knownCloudRoundIdsRef.current.add(r.id);
               dirty = true;
             }
           });
@@ -6969,6 +7001,7 @@ function DogfightLeague() {
               if (!curRoundIds.has(id) && lastSyncedRef.current.rounds[id] !== undefined) {
                 batch.delete(base.collection('rounds').doc(id));
                 delete lastSyncedRef.current.rounds[id];
+                knownCloudRoundIdsRef.current.delete(id);
                 dirty = true;
               }
             });
