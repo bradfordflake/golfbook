@@ -297,6 +297,9 @@ const DEFAULT_SETTINGS = {
   rollingWindow: 0,
   purseBuyIn: 20,
   purseSplits: [50, 30, 20],
+  // 'percent' uses purseSplits. 'refundSecond' hands 2nd place their buy-in
+  // straight back (net zero on the day) and gives the winner everything else.
+  purseMode: 'percent',
   seasonBuyIn: 100,
   seasonRakePerRound: 20,
   skinsBuyIn: 5,
@@ -332,6 +335,10 @@ const SETTINGS_FIELD_LABELS = {
   rollingWindow: { label: 'Rolling average window', format: (v) => v },
   purseBuyIn: { label: 'Weekly purse buy-in', format: (v) => `$${v}` },
   purseSplits: { label: 'Weekly purse payout split', format: (v) => v.join('/') + '%' },
+  purseMode: {
+    label: 'Weekly purse payout style',
+    format: (v) => (v === 'refundSecond' ? '2nd refunded, winner takes rest' : 'Percentage split'),
+  },
   seasonBuyIn: { label: 'Season buy-in', format: (v) => `$${v}` },
   seasonRakePerRound: { label: 'Season rake per round', format: (v) => `$${v}` },
   seasonStart: { label: 'Season start date', format: (v) => v },
@@ -543,6 +550,27 @@ function partialSum(values) {
   const scored = values.filter((v) => v != null);
   if (scored.length === 0) return null;
   return scored.reduce((s, v) => s + v, 0);
+}
+// Column layout matching a printed scorecard: holes 1-9, OUT, holes 10-18,
+// IN, TOT. Every row (hole numbers, par, stroke index, each player) renders
+// from this same model so the summary columns always line up.
+function scorecardColumns(holes) {
+  const n = holes.length;
+  const cols = [];
+  if (n <= 9) {
+    for (let i = 0; i < n; i++) cols.push({ type: 'hole', idx: i });
+    cols.push({ type: 'sum', key: 'tot', label: 'TOT', from: 0, to: n });
+    return cols;
+  }
+  for (let i = 0; i < 9; i++) cols.push({ type: 'hole', idx: i });
+  cols.push({ type: 'sum', key: 'out', label: 'OUT', from: 0, to: 9 });
+  for (let i = 9; i < n; i++) cols.push({ type: 'hole', idx: i });
+  cols.push({ type: 'sum', key: 'in', label: 'IN', from: 9, to: n });
+  cols.push({ type: 'sum', key: 'tot', label: 'TOT', from: 0, to: n });
+  return cols;
+}
+function sumOverCols(values, col) {
+  return partialSum(values.slice(col.from, col.to));
 }
 function stablefordPoints(strokes, par, settings) {
   const pts = (settings && settings.stablefordPoints) || DEFAULT_SETTINGS.stablefordPoints;
@@ -1117,19 +1145,65 @@ function purseForEvent(settings, event, rounds, courses, players) {
   const rake = ranked.length > 0 ? settings.seasonRakePerRound : 0;
   const payoutPool = Math.max(0, pot - rake);
   const payouts = {};
-  // Ties share the combined payout for the places they occupy, so nobody loses
-  // money to an arbitrary sort order when two players finish level.
-  let i = 0;
-  while (i < ranked.length) {
-    let j = i;
-    while (j + 1 < ranked.length && ranked[j + 1].result === ranked[i].result) j++;
-    let share = 0;
-    for (let k = i; k <= j; k++) share += settings.purseSplits[k] || 0;
-    const each = Math.round((payoutPool * share) / 100 / (j - i + 1));
-    for (let k = i; k <= j; k++) payouts[ranked[k].id] = each;
-    i = j + 1;
+  // Rank groups: everyone tied at the same result shares the places they occupy.
+  const groups = [];
+  {
+    let i = 0;
+    while (i < ranked.length) {
+      let j = i;
+      while (j + 1 < ranked.length && ranked[j + 1].result === ranked[i].result) j++;
+      groups.push(ranked.slice(i, j + 1));
+      i = j + 1;
+    }
   }
-  return { pot, rake, payoutPool, ranked, payouts, scoredCount: ranked.length };
+
+  if (settings.purseMode === 'refundSecond' && ranked.length > 0) {
+    // 2nd place is made whole (gets their buy-in back, netting zero) and the
+    // winner takes everything left. Anyone tied for 2nd is also refunded; if
+    // the pool can't cover every refund it's shared evenly among them.
+    const winners = groups[0] || [];
+    const seconds = groups[1] || [];
+    const refundTotal = Math.min(payoutPool, seconds.length * settings.purseBuyIn);
+    let refundEach = seconds.length ? Math.floor(refundTotal / seconds.length) : 0;
+    // Guard: on a short field the pot can be too thin to refund 2nd and still
+    // leave the winner ahead — a full refund would literally pay the winner
+    // less than the runner-up. When that happens, share what's there evenly
+    // between the winner(s) and 2nd rather than inverting the finish order.
+    if (seconds.length && winners.length) {
+      const leftover = payoutPool - refundEach * seconds.length;
+      if (Math.floor(leftover / winners.length) < refundEach) {
+        refundEach = Math.floor(payoutPool / (winners.length + seconds.length));
+      }
+    }
+    seconds.forEach((x) => (payouts[x.id] = refundEach));
+    const remainder = payoutPool - refundEach * seconds.length;
+    const winEach = winners.length ? Math.floor(remainder / winners.length) : 0;
+    winners.forEach((x) => (payouts[x.id] = winEach));
+    ranked.forEach((x) => {
+      if (payouts[x.id] == null) payouts[x.id] = 0;
+    });
+    // Hand any rounding remainder to the outright leader so the pot balances.
+    const paid = Object.values(payouts).reduce((a, b) => a + b, 0);
+    if (winners.length && payoutPool - paid > 0) payouts[winners[0].id] += payoutPool - paid;
+  } else {
+    // Percentage splits. Ties share the combined payout for the places they
+    // occupy, so nobody loses money to an arbitrary sort order.
+    let placeIdx = 0;
+    groups.forEach((g) => {
+      let share = 0;
+      for (let k = placeIdx; k < placeIdx + g.length; k++) share += settings.purseSplits[k] || 0;
+      const each = Math.round((payoutPool * share) / 100 / g.length);
+      g.forEach((x) => (payouts[x.id] = each));
+      placeIdx += g.length;
+    });
+  }
+  // Net profit, not gross winnings: everyone who played paid the buy-in into
+  // the pot, so a player who collects less than they put in is down on the day.
+  const net = {};
+  ranked.forEach((x) => {
+    net[x.id] = (payouts[x.id] || 0) - settings.purseBuyIn;
+  });
+  return { pot, rake, payoutPool, ranked, payouts, net, scoredCount: ranked.length };
 }
 
 function purseForRound(settings, round, players, course) {
@@ -1905,11 +1979,11 @@ function StandingsTab({ settings, players, setPlayers, rounds, courses, onGoPlay
     .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
   const activeEvent = events[Math.min(eventIdx, Math.max(0, events.length - 1))] || null;
 
-  // Money won per player across every day, for the season table.
+  // Money won per player across every day, net of the buy-in they paid in.
   const moneyByPlayer = {};
   players.forEach((p) => (moneyByPlayer[p.id] = 0));
   events.forEach((ev) => {
-    Object.entries(ev.purse.payouts).forEach(([pid, amt]) => (moneyByPlayer[pid] = (moneyByPlayer[pid] || 0) + amt));
+    Object.entries(ev.purse.net).forEach(([pid, amt]) => (moneyByPlayer[pid] = (moneyByPlayer[pid] || 0) + amt));
   });
 
   const seasonPool = settings.seasonBuyIn * players.length + events.length * settings.seasonRakePerRound;
@@ -1945,7 +2019,7 @@ function StandingsTab({ settings, players, setPlayers, rounds, courses, onGoPlay
     const summary = leaderboard
       .map(
         (p, i) =>
-          `${p.name}: rank #${i + 1}, ${(season.rawTotals[p.id] || 0) >= 0 ? '+' : ''}${season.rawTotals[p.id] || 0} quota points, ${season.roundsPlayed[p.id] || 0} dogfights played, ${skinsByPlayer[p.id] || 0} skins won, $${moneyByPlayer[p.id] || 0} won`
+          `${p.name}: rank #${i + 1}, ${(season.rawTotals[p.id] || 0) >= 0 ? '+' : ''}${season.rawTotals[p.id] || 0} quota points, ${season.roundsPlayed[p.id] || 0} dogfights played, ${skinsByPlayer[p.id] || 0} skins won, $${(moneyByPlayer[p.id] || 0) >= 0 ? '+' : '-'}$${Math.abs(moneyByPlayer[p.id] || 0)} net after buy-ins`
       )
       .join('\n');
     const prompt = `You are writing a fun, lighthearted end-of-season awards write-up for a golf betting league called "${settings.leagueName}". Here is the season data, one line per player:
@@ -2085,6 +2159,7 @@ Respond with ONLY this JSON, no other text: [{"title": "Award Name", "player": "
                     const p = players.find((pp) => pp.id === x.id);
                     if (!p) return null;
                     const money = purse.payouts[x.id] || 0;
+                    const dayNet = purse.net[x.id] || 0;
                     return (
                       <div key={x.id}>
                         <div
@@ -2115,13 +2190,20 @@ Respond with ONLY this JSON, no other text: [{"title": "Award Name", "player": "
                             {x.result}
                           </span>
                         </div>
-                        {money > 0 && (
-                          <div className="flex justify-end -mt-1 mb-1">
+                        <div className="flex justify-end -mt-1 mb-1 gap-1.5 items-center">
+                          {money > 0 && (
                             <span className="px-2 py-0.5 rounded-full text-[11px] font-bold" style={{ background: C.limeSoft, color: C.lime }}>
                               collects ${money}
                             </span>
-                          </div>
-                        )}
+                          )}
+                          <span
+                            className="px-2 py-0.5 rounded-full text-[11px] font-bold"
+                            style={{ background: C.surface2, color: dayNet >= 0 ? C.lime : C.red }}
+                            title={`$${money} won − $${settings.purseBuyIn} buy-in`}
+                          >
+                            {dayNet >= 0 ? '+' : '−'}${Math.abs(dayNet)} net
+                          </span>
+                        </div>
                       </div>
                     );
                   })}
@@ -2130,6 +2212,10 @@ Respond with ONLY this JSON, no other text: [{"title": "Award Name", "player": "
                       Nothing to pay out — the pot didn't cover the season rake.
                     </div>
                   )}
+                  <div className="text-[11px] mt-2" style={{ color: C.faint }}>
+                    Net is what each player collects minus their ${settings.purseBuyIn} buy-in, so it
+                    adds up to −${purse.rake} across the group — the amount going to the season pool.
+                  </div>
                 </Card>
               </>
             );
@@ -2163,7 +2249,7 @@ Respond with ONLY this JSON, no other text: [{"title": "Award Name", "player": "
                   <div>Player</div>
                   <div className="text-right">Played</div>
                   <div className="text-right">Quota</div>
-                  <div className="text-right">Won</div>
+                  <div className="text-right">Net</div>
                 </div>
                 {leaderboard.map((p, i) => (
                   <div
@@ -2190,8 +2276,11 @@ Respond with ONLY this JSON, no other text: [{"title": "Award Name", "player": "
                       {(season.rawTotals[p.id] || 0) >= 0 ? '+' : ''}
                       {season.rawTotals[p.id] || 0}
                     </span>
-                    <span className="text-right text-xs" style={{ color: C.gold }}>
-                      ${moneyByPlayer[p.id] || 0}
+                    <span
+                      className="text-right text-xs font-semibold"
+                      style={{ color: (moneyByPlayer[p.id] || 0) >= 0 ? C.lime : C.red }}
+                    >
+                      {(moneyByPlayer[p.id] || 0) >= 0 ? '+' : '−'}${Math.abs(moneyByPlayer[p.id] || 0)}
                     </span>
                   </div>
                 ))}
@@ -2906,10 +2995,21 @@ function playerSeasonMoney(settings, rounds, courses, allPlayers, player) {
     let rSkins = 0;
     let rTrash = 0;
 
+    // Purse is settled per DAY, not per round: a day played as two combined
+    // nines is one buy-in, not two. Only the round that owns the event
+    // contributes, so the buy-in isn't charged twice.
     if (!r.casual && playerPointsInRound(settings, r, player, course) != null) {
-      const purse = purseForRound(settings, r, roundPlayers, course);
-      if (purse && purse.scoredCount > 0) {
-        rPurse = (purse.payouts[player.id] || 0) - settings.purseBuyIn;
+      const ownsEvent = !r.combinedWith || r.id < r.combinedWith;
+      if (ownsEvent) {
+        const evRounds = r.combinedWith ? sorted.filter((x) => x.id === r.id || x.id === r.combinedWith) : [r];
+        const ev = { id: r.id, date: r.date, roundIds: evRounds.map((x) => x.id) };
+        const evPlayerIds = new Set();
+        evRounds.forEach((x) => (x.playerIds || []).forEach((id) => evPlayerIds.add(id)));
+        const evPlayers = allPlayers.filter((p) => evPlayerIds.has(p.id));
+        const purse = purseForEvent(settings, ev, sorted, courses, evPlayers);
+        if (purse && purse.scoredCount > 0) {
+          rPurse = purse.net[player.id] != null ? purse.net[player.id] : 0;
+        }
       }
     }
 
@@ -4681,12 +4781,7 @@ function LiveScoring({ settings, round, players, course, patchRound, setHoleScor
 // ---------- Round Summary (shown after Finish round) ----------
 function HoleByHoleRecap({ round, course, players }) {
   const holes = roundHoles(round, course);
-  const isEighteen = holes.length > 9;
-  const summaryLabels = isEighteen ? ['OUT', 'IN', 'TOT'] : ['TOT'];
-  const summaryCount = summaryLabels.length;
-  const frontPar = holes.slice(0, 9).reduce((s, h) => s + h.par, 0);
-  const backPar = holes.slice(9).reduce((s, h) => s + h.par, 0);
-  const parSummary = isEighteen ? [frontPar, backPar, frontPar + backPar] : [frontPar];
+  const cardCols = scorecardColumns(holes);
   return (
     <Card>
       <div className="font-display text-lg mb-2" style={{ color: C.text }}>
@@ -4696,93 +4791,80 @@ function HoleByHoleRecap({ round, course, players }) {
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: `100px repeat(${holes.length}, 32px) repeat(${summaryCount}, 38px)`,
-            minWidth: 100 + holes.length * 32 + summaryCount * 38,
+            gridTemplateColumns: `100px ${cardCols.map((c) => (c.type === 'hole' ? '32px' : '38px')).join(' ')}`,
+            minWidth: 100 + cardCols.reduce((w, c) => w + (c.type === 'hole' ? 32 : 38), 0),
           }}
         >
-          <div style={{ position: 'sticky', left: 0, background: C.surface }} className="text-[9px] uppercase py-1">
+          <div style={{ position: 'sticky', left: 0, background: C.surface, zIndex: 1 }} className="text-[9px] uppercase py-1">
             <span style={{ color: C.muted }}>Hole</span>
           </div>
-          {holes.map((h, i) => (
-            <div key={i} className="text-[10px] text-center py-1 font-display" style={{ color: C.text }}>
-              {i + 1}
-            </div>
-          ))}
-          {summaryLabels.map((label, i) => (
-            <div
-              key={label}
-              className="text-[9px] text-center py-1 font-display uppercase"
-              style={{ color: C.lime, borderLeft: i === 0 ? `1px solid ${C.border}` : 'none' }}
-            >
-              {label}
-            </div>
-          ))}
-          <div style={{ position: 'sticky', left: 0, background: C.surface }} className="text-[9px] py-1">
+          {cardCols.map((c, ci) =>
+            c.type === 'hole' ? (
+              <div key={ci} className="text-[10px] text-center py-1 font-display" style={{ color: C.text }}>
+                {c.idx + 1}
+              </div>
+            ) : (
+              <div key={ci} className="text-[9px] text-center py-1 font-display uppercase" style={{ color: C.lime, background: C.surface2 }}>
+                {c.label}
+              </div>
+            )
+          )}
+          <div style={{ position: 'sticky', left: 0, background: C.surface, zIndex: 1 }} className="text-[9px] py-1">
             <span style={{ color: C.muted }}>Par</span>
           </div>
-          {holes.map((h, i) => (
-            <div key={i} className="text-[10px] text-center py-1" style={{ color: C.muted }}>
-              {h.par}
-            </div>
-          ))}
-          {parSummary.map((val, i) => (
-            <div
-              key={i}
-              className="text-[10px] text-center py-1 font-semibold"
-              style={{ color: C.muted, borderLeft: i === 0 ? `1px solid ${C.border}` : 'none' }}
-            >
-              {val}
-            </div>
-          ))}
-          <div style={{ position: 'sticky', left: 0, background: C.surface }} className="text-[9px] py-1 mb-1">
-            <span style={{ color: C.muted }}>Stroke Idx</span>
+          {cardCols.map((c, ci) =>
+            c.type === 'hole' ? (
+              <div key={ci} className="text-[10px] text-center py-1" style={{ color: C.muted }}>
+                {holes[c.idx].par}
+              </div>
+            ) : (
+              <div key={ci} className="text-[10px] text-center py-1 font-semibold" style={{ color: C.muted, background: C.surface2 }}>
+                {holes.slice(c.from, c.to).reduce((sum, h) => sum + h.par, 0)}
+              </div>
+            )
+          )}
+          <div style={{ position: 'sticky', left: 0, background: C.surface, zIndex: 1 }} className="text-[9px] py-1 mb-1">
+            <span style={{ color: C.muted }}>Hdcp</span>
           </div>
-          {holes.map((h, i) => (
-            <div key={i} className="text-[10px] text-center py-1 mb-1" style={{ color: C.faint, borderBottom: `1px solid ${C.border}` }}>
-              {h.si}
-            </div>
-          ))}
-          {summaryLabels.map((_, i) => (
-            <div
-              key={i}
-              className="text-[10px] text-center py-1 mb-1"
-              style={{ borderBottom: `1px solid ${C.border}`, borderLeft: i === 0 ? `1px solid ${C.border}` : 'none' }}
-            />
-          ))}
+          {cardCols.map((c, ci) =>
+            c.type === 'hole' ? (
+              <div key={ci} className="text-[10px] text-center py-1 mb-1" style={{ color: C.faint, borderBottom: `1px solid ${C.border}` }}>
+                {holes[c.idx].si}
+              </div>
+            ) : (
+              <div key={ci} className="py-1 mb-1" style={{ borderBottom: `1px solid ${C.border}`, background: C.surface2 }} />
+            )
+          )}
           {players.map((p) => {
             const scores = holes.map((h, i) => round.playerData[p.id]?.holeScores?.[i]);
-            const frontSum = partialSum(scores.slice(0, 9));
-            const backSum = partialSum(scores.slice(9));
-            const totalSum = partialSum(scores);
-            const sumsSummary = isEighteen ? [frontSum, backSum, totalSum] : [totalSum];
             return (
               <React.Fragment key={p.id}>
-                <div style={{ position: 'sticky', left: 0, background: C.surface }} className="text-[11px] py-1 truncate pr-1 flex items-center gap-1" title={`${p.name} · ${playerTeeName(round, p.id)} tees`}>
+                <div style={{ position: 'sticky', left: 0, background: C.surface, zIndex: 1 }} className="text-[11px] py-1 truncate pr-1 flex items-center gap-1" title={`${p.name} · ${playerTeeName(round, p.id)} tees`}>
                   <span
                     className="rounded-full shrink-0"
                     style={{ width: 8, height: 8, background: teeSwatch(playerTeeName(round, p.id)), border: `1px solid ${C.faint}` }}
                   />
                   <span className="truncate" style={{ color: C.text }}>{p.name}</span>
                 </div>
-                {holes.map((h, i) => {
-                  const g = round.playerData[p.id]?.holeScores?.[i];
+                {cardCols.map((c, ci) => {
+                  if (c.type === 'sum') {
+                    const val = sumOverCols(scores, c);
+                    return (
+                      <div key={ci} className="flex items-center justify-center" style={{ height: 30, background: C.surface2 }}>
+                        <span className="font-display" style={{ fontSize: 12, fontWeight: 700, color: val != null ? C.lime : C.faint }}>
+                          {val ?? '–'}
+                        </span>
+                      </div>
+                    );
+                  }
+                  const h = holes[c.idx];
+                  const g = round.playerData[p.id]?.holeScores?.[c.idx];
                   return (
-                    <div key={i} className="flex items-center justify-center" style={{ height: 30 }}>
+                    <div key={ci} className="flex items-center justify-center" style={{ height: 30 }}>
                       <ScoreMark strokes={g} par={h.par} size={19} fontSize={11} />
                     </div>
                   );
                 })}
-                {sumsSummary.map((val, i) => (
-                  <div
-                    key={i}
-                    className="flex items-center justify-center"
-                    style={{ height: 30, borderLeft: i === 0 ? `1px solid ${C.border}` : 'none' }}
-                  >
-                    <span className="font-display" style={{ fontSize: 12, fontWeight: 700, color: val != null ? C.lime : C.faint }}>
-                      {val ?? '–'}
-                    </span>
-                  </div>
-                ))}
               </React.Fragment>
             );
           })}
@@ -5219,12 +5301,7 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
     const course = courses.find((c) => c.id === editing.courseId) || courses[0];
     const tee = getTee(course, editing.teeName);
     const holes = roundHoles(editing, course);
-    const isEighteen = holes.length > 9;
-    const summaryLabels = isEighteen ? ['OUT', 'IN', 'TOT'] : ['TOT'];
-    const summaryCount = summaryLabels.length;
-    const frontPar = holes.slice(0, 9).reduce((s, h) => s + h.par, 0);
-    const backPar = holes.slice(9).reduce((s, h) => s + h.par, 0);
-    const parSummary = isEighteen ? [frontPar, backPar, frontPar + backPar] : [frontPar];
+    const cardCols = scorecardColumns(holes);
     const otherNines = rounds.filter((r) => r.id !== editing.id && r.holes === 9 && (!r.combinedWith || r.combinedWith === editing.id));
     const activePlayers = roundPlayerList(editing, players);
     const selectedIds = Array.isArray(editing.playerIds) ? editing.playerIds : players.map((p) => p.id);
@@ -5688,68 +5765,59 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
               <div
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: `110px repeat(${holes.length}, 42px) repeat(${summaryCount}, 42px)`,
-                  minWidth: 110 + holes.length * 42 + summaryCount * 42,
+                  gridTemplateColumns: `110px ${cardCols.map((c) => (c.type === 'hole' ? '42px' : '46px')).join(' ')}`,
+                  minWidth: 110 + cardCols.reduce((w, c) => w + (c.type === 'hole' ? 42 : 46), 0),
                 }}
               >
-                <div style={{ position: 'sticky', left: 0, background: C.surface }} className="text-[10px] uppercase py-1" >
+                <div style={{ position: 'sticky', left: 0, background: C.surface, zIndex: 1 }} className="text-[10px] uppercase py-1">
                   <span style={{ color: C.muted }}>Hole</span>
                 </div>
-                {holes.map((h, i) => (
-                  <div key={i} className="text-[11px] text-center py-1 font-display" style={{ color: C.text }}>
-                    {i + 1}
-                  </div>
-                ))}
-                {summaryLabels.map((label, i) => (
-                  <div
-                    key={label}
-                    className="text-[11px] text-center py-1 font-display uppercase"
-                    style={{ color: C.lime, borderLeft: i === 0 ? `1px solid ${C.border}` : 'none' }}
-                  >
-                    {label}
-                  </div>
-                ))}
-                <div style={{ position: 'sticky', left: 0, background: C.surface }} className="text-[10px] py-1">
+                {cardCols.map((c, ci) =>
+                  c.type === 'hole' ? (
+                    <div key={ci} className="text-[11px] text-center py-1 font-display" style={{ color: C.text }}>
+                      {c.idx + 1}
+                    </div>
+                  ) : (
+                    <div
+                      key={ci}
+                      className="text-[11px] text-center py-1 font-display uppercase"
+                      style={{ color: C.lime, background: C.surface2 }}
+                    >
+                      {c.label}
+                    </div>
+                  )
+                )}
+                <div style={{ position: 'sticky', left: 0, background: C.surface, zIndex: 1 }} className="text-[10px] py-1">
                   <span style={{ color: C.muted }}>Par</span>
                 </div>
-                {holes.map((h, i) => (
-                  <div key={i} className="text-[11px] text-center py-1" style={{ color: C.muted }}>
-                    {h.par}
-                  </div>
-                ))}
-                {parSummary.map((val, i) => (
-                  <div
-                    key={i}
-                    className="text-[11px] text-center py-1 font-semibold"
-                    style={{ color: C.muted, borderLeft: i === 0 ? `1px solid ${C.border}` : 'none' }}
-                  >
-                    {val}
-                  </div>
-                ))}
-                <div style={{ position: 'sticky', left: 0, background: C.surface }} className="text-[10px] py-1 mb-1">
-                  <span style={{ color: C.muted }}>Stroke Idx</span>
+                {cardCols.map((c, ci) =>
+                  c.type === 'hole' ? (
+                    <div key={ci} className="text-[11px] text-center py-1" style={{ color: C.muted }}>
+                      {holes[c.idx].par}
+                    </div>
+                  ) : (
+                    <div key={ci} className="text-[11px] text-center py-1 font-semibold" style={{ color: C.muted, background: C.surface2 }}>
+                      {holes.slice(c.from, c.to).reduce((sum, h) => sum + h.par, 0)}
+                    </div>
+                  )
+                )}
+                <div style={{ position: 'sticky', left: 0, background: C.surface, zIndex: 1 }} className="text-[10px] py-1 mb-1">
+                  <span style={{ color: C.muted }}>Hdcp</span>
                 </div>
-                {holes.map((h, i) => (
-                  <div key={i} className="text-[11px] text-center py-1 mb-1" style={{ color: C.faint, borderBottom: `1px solid ${C.border}` }}>
-                    {h.si}
-                  </div>
-                ))}
-                {summaryLabels.map((_, i) => (
-                  <div
-                    key={i}
-                    className="text-[11px] text-center py-1 mb-1"
-                    style={{ borderBottom: `1px solid ${C.border}`, borderLeft: i === 0 ? `1px solid ${C.border}` : 'none' }}
-                  />
-                ))}
+                {cardCols.map((c, ci) =>
+                  c.type === 'hole' ? (
+                    <div key={ci} className="text-[11px] text-center py-1 mb-1" style={{ color: C.faint, borderBottom: `1px solid ${C.border}` }}>
+                      {holes[c.idx].si}
+                    </div>
+                  ) : (
+                    <div key={ci} className="py-1 mb-1" style={{ borderBottom: `1px solid ${C.border}`, background: C.surface2 }} />
+                  )
+                )}
                 {activePlayers.map((p) => {
                   const scores = holes.map((h, i) => editing.playerData[p.id]?.holeScores?.[i]);
-                  const frontSum = partialSum(scores.slice(0, 9));
-                  const backSum = partialSum(scores.slice(9));
-                  const totalSum = partialSum(scores);
-                  const sumsSummary = isEighteen ? [frontSum, backSum, totalSum] : [totalSum];
                   return (
                   <React.Fragment key={p.id}>
-                    <div style={{ position: 'sticky', left: 0, background: C.surface }} className="text-xs py-1.5 pr-2" title={`${p.name} · ${playerTeeName(editing, p.id)} tees`}>
+                    <div style={{ position: 'sticky', left: 0, background: C.surface, zIndex: 1 }} className="text-xs py-1.5 pr-2" title={`${p.name} · ${playerTeeName(editing, p.id)} tees`}>
                       <div className="flex items-center gap-1.5 min-w-0">
                         <span
                           className="rounded-full shrink-0"
@@ -5761,14 +5829,30 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
                         quota {playerQuotaInRound(settings, editing, p, course)}
                       </div>
                     </div>
-                    {holes.map((h, i) => {
+                    {cardCols.map((c, ci) => {
+                      if (c.type === 'sum') {
+                        const val = sumOverCols(scores, c);
+                        return (
+                          <div
+                            key={ci}
+                            className="py-1 flex items-center justify-center"
+                            style={{ background: C.surface2 }}
+                          >
+                            <span className="font-display text-xs font-bold" style={{ color: val != null ? C.lime : C.faint }}>
+                              {val ?? '–'}
+                            </span>
+                          </div>
+                        );
+                      }
+                      const i = c.idx;
+                      const h = holes[i];
                       const v = editing.playerData[p.id]?.holeScores?.[i];
                       const d = v == null ? null : v - h.par;
                       const col = v == null ? C.text : scoreColor(v, h.par);
                       const shape = d == null || d === 0 ? 'none' : d < 0 ? 'circle' : 'square';
                       const dbl = d != null && Math.abs(d) >= 2;
                       return (
-                        <div key={i} className="py-1 flex items-center justify-center">
+                        <div key={ci} className="py-1 flex items-center justify-center">
                           <input
                             type="number"
                             value={v ?? ''}
@@ -5786,17 +5870,6 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
                         </div>
                       );
                     })}
-                    {sumsSummary.map((val, i) => (
-                      <div
-                        key={i}
-                        className="py-1 flex items-center justify-center"
-                        style={{ borderLeft: i === 0 ? `1px solid ${C.border}` : 'none' }}
-                      >
-                        <span className="font-display text-xs font-bold" style={{ color: val != null ? C.lime : C.faint }}>
-                          {val ?? '–'}
-                        </span>
-                      </div>
-                    ))}
                   </React.Fragment>
                   );
                 })}
@@ -6209,10 +6282,16 @@ function SettingsTab({ settings, setSettings, players, setPlayers, courses, roun
           </div>
           <SelectField
             label="Payout"
-            value={draftSettings.purseSplits.join(',')}
-            onChange={(v) => patchDraft({ purseSplits: v.split(',').map(Number) })}
+            value={draftSettings.purseMode === 'refundSecond' ? 'refundSecond' : draftSettings.purseSplits.join(',')}
+            onChange={(v) => {
+              if (v === 'refundSecond') patchDraft({ purseMode: 'refundSecond' });
+              else patchDraft({ purseMode: 'percent', purseSplits: v.split(',').map(Number) });
+            }}
             options={[
               { value: '100', label: 'Winner takes all' },
+              { value: 'refundSecond', label: '2nd gets buy-in back, winner takes rest' },
+              { value: '80,20', label: 'Top 2 split 80/20' },
+              { value: '70,30', label: 'Top 2 split 70/30' },
               { value: '60,40', label: 'Top 2 split 60/40' },
               { value: '50,30,20', label: 'Top 3 split 50/30/20' },
               { value: '40,30,20,10', label: 'Top 4 split 40/30/20/10' },
