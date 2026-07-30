@@ -1674,6 +1674,482 @@ function purseForRound(settings, round, players, course) {
 }
 
 // ---------- small UI primitives ----------
+const IOS_GESTURE_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)';
+const IOS_GESTURE_SETTLE = 'cubic-bezier(0.32, 0.72, 0, 1)';
+
+function prefersReducedMotion() {
+  return typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+function gestureFeedback(strength = 'light') {
+  // iOS Safari does not expose the Taptic Engine to web pages. This provides
+  // equivalent threshold feedback on browsers that implement vibration while
+  // the visual spring remains the universal fallback.
+  try {
+    if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(strength === 'medium' ? 12 : 7);
+  } catch (e) {}
+}
+
+function nextPaint(fn) {
+  requestAnimationFrame(() => requestAnimationFrame(fn));
+}
+
+function currentTranslateX(element) {
+  if (!element || typeof window === 'undefined') return 0;
+  try {
+    const transform = window.getComputedStyle(element).transform;
+    if (!transform || transform === 'none') return 0;
+    if (typeof DOMMatrixReadOnly !== 'undefined') return new DOMMatrixReadOnly(transform).m41 || 0;
+    const values = transform.match(/matrix(?:3d)?\((.+)\)/)?.[1]?.split(',').map(Number) || [];
+    return values.length === 16 ? values[12] || 0 : values[4] || 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
+function InteractiveEdgeBack({ children, underlay, onBack, enabled = true, ariaLabel = 'Swipe from the left edge to go back' }) {
+  const rootRef = useRef(null);
+  const pageRef = useRef(null);
+  const underlayRef = useRef(null);
+  const gestureRef = useRef(null);
+  const rafRef = useRef(null);
+  const finishTimerRef = useRef(null);
+  const [revealed, setRevealed] = useState(false);
+
+  useEffect(() => () => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    if (finishTimerRef.current) clearTimeout(finishTimerRef.current);
+  }, []);
+
+  function paint(offset) {
+    const root = rootRef.current;
+    const page = pageRef.current;
+    const below = underlayRef.current;
+    if (!root || !page || !below) return;
+    const width = Math.max(1, root.getBoundingClientRect().width);
+    const x = Math.max(0, Math.min(width, offset));
+    const progress = x / width;
+    page.style.transform = `translate3d(${x}px, 0, 0)`;
+    page.style.boxShadow = x > 0 ? '-10px 0 28px rgba(0,0,0,0.20)' : 'none';
+    below.style.transform = `translate3d(${(-18 + 18 * progress)}%, 0, 0)`;
+    below.style.opacity = String(0.72 + 0.28 * progress);
+  }
+
+  function animateTo(target, velocity, complete) {
+    const page = pageRef.current;
+    const below = underlayRef.current;
+    const root = rootRef.current;
+    if (!page || !below || !root) return;
+    const reduced = prefersReducedMotion();
+    const width = Math.max(1, root.getBoundingClientRect().width);
+    const distance = Math.abs(target - (gestureRef.current?.offset || 0));
+    const speed = Math.max(0.25, Math.abs(velocity || 0));
+    const duration = reduced ? 1 : Math.max(180, Math.min(390, 170 + distance / speed * 0.12));
+    page.style.transition = `transform ${duration}ms ${complete ? IOS_GESTURE_SETTLE : IOS_GESTURE_EASING}, box-shadow ${duration}ms ease`;
+    below.style.transition = `transform ${duration}ms ${IOS_GESTURE_EASING}, opacity ${duration}ms ease`;
+    paint(target);
+    finishTimerRef.current = setTimeout(() => {
+      if (complete) {
+        gestureFeedback('light');
+        onBack();
+      } else {
+        page.style.transition = '';
+        below.style.transition = '';
+        paint(0);
+        setRevealed(false);
+      }
+      gestureRef.current = null;
+    }, duration + 18);
+  }
+
+  function endGesture(cancelled = false) {
+    const g = gestureRef.current;
+    if (!g) return;
+    const progress = g.offset / Math.max(1, g.width);
+    const shouldComplete = !cancelled && g.lock === 'horizontal' && (progress >= 0.34 || g.velocity > 0.52);
+    animateTo(shouldComplete ? g.width + 8 : 0, g.velocity, shouldComplete);
+  }
+
+  function onPointerDown(e) {
+    if (!enabled || !onBack || e.isPrimary === false || e.button > 0) return;
+    const root = rootRef.current;
+    if (!root) return;
+    const rect = root.getBoundingClientRect();
+    if (e.clientX - rect.left > 28) return;
+    if (e.target.closest('input, textarea, select, [data-swipe-ignore="true"]')) return;
+    if (finishTimerRef.current) clearTimeout(finishTimerRef.current);
+    const page = pageRef.current;
+    const interruptedOffset = Math.max(0, currentTranslateX(page));
+    if (page) page.style.transition = 'none';
+    if (underlayRef.current) underlayRef.current.style.transition = 'none';
+    gestureRef.current = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      lastX: e.clientX,
+      lastT: performance.now(),
+      velocity: 0,
+      offset: interruptedOffset,
+      startOffset: interruptedOffset,
+      width: rect.width,
+      lock: null,
+      didDrag: false,
+    };
+    setRevealed(true);
+    paint(interruptedOffset);
+    if (e.currentTarget.setPointerCapture) e.currentTarget.setPointerCapture(e.pointerId);
+  }
+
+  function onPointerMove(e) {
+    const g = gestureRef.current;
+    if (!g || g.pointerId !== e.pointerId) return;
+    const dx = Math.max(0, g.startOffset + e.clientX - g.startX);
+    const dy = e.clientY - g.startY;
+    if (!g.lock && Math.max(dx, Math.abs(dy)) > 8) {
+      g.lock = dx > Math.abs(dy) * 1.18 ? 'horizontal' : 'vertical';
+      if (g.lock === 'vertical') {
+        endGesture(true);
+        return;
+      }
+    }
+    if (g.lock !== 'horizontal') return;
+    g.didDrag = true;
+    e.preventDefault();
+    const now = performance.now();
+    const elapsed = Math.max(1, now - g.lastT);
+    const instantVelocity = (e.clientX - g.lastX) / elapsed;
+    g.velocity = g.velocity * 0.65 + instantVelocity * 0.35;
+    g.lastX = e.clientX;
+    g.lastT = now;
+    g.offset = dx;
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    rafRef.current = requestAnimationFrame(() => paint(dx));
+  }
+
+  return (
+    <div
+      ref={rootRef}
+      className="ios-edge-back"
+      aria-label={ariaLabel}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={() => endGesture(false)}
+      onPointerCancel={() => endGesture(true)}
+      onClickCapture={(e) => {
+        if (gestureRef.current?.didDrag) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }}
+    >
+      <div ref={underlayRef} className="ios-edge-underlay" aria-hidden={!revealed} style={{ visibility: revealed ? 'visible' : 'hidden' }}>
+        {underlay}
+      </div>
+      <div ref={pageRef} className="ios-edge-page">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function HorizontalSwipePager({
+  children,
+  onPrevious,
+  onNext,
+  canPrevious = true,
+  canNext = true,
+  enabled = true,
+  edgeInset = 0,
+  ariaLabel = 'Swipe horizontally',
+}) {
+  const rootRef = useRef(null);
+  const pageRef = useRef(null);
+  const gestureRef = useRef(null);
+  const rafRef = useRef(null);
+  const timerRef = useRef(null);
+
+  useEffect(() => () => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    if (timerRef.current) clearTimeout(timerRef.current);
+  }, []);
+
+  function paint(offset) {
+    const page = pageRef.current;
+    if (!page) return;
+    page.style.transform = `translate3d(${offset}px, 0, 0)`;
+  }
+
+  function settle(offset, velocity, direction) {
+    const page = pageRef.current;
+    const root = rootRef.current;
+    if (!page || !root) return;
+    const reduced = prefersReducedMotion();
+    const width = Math.max(1, root.getBoundingClientRect().width);
+    const complete = direction === 'next' ? canNext : direction === 'previous' ? canPrevious : false;
+    const target = complete ? (direction === 'next' ? -width - 10 : width + 10) : 0;
+    const distance = Math.abs(target - offset);
+    const speed = Math.max(0.28, Math.abs(velocity || 0));
+    const duration = reduced ? 1 : Math.max(170, Math.min(340, 155 + distance / speed * 0.1));
+    page.style.transition = `transform ${duration}ms ${complete ? IOS_GESTURE_SETTLE : IOS_GESTURE_EASING}, opacity ${duration}ms ease`;
+    page.style.opacity = complete ? '0.92' : '1';
+    paint(target);
+    timerRef.current = setTimeout(() => {
+      if (!complete) {
+        page.style.transition = '';
+        paint(0);
+        gestureRef.current = null;
+        return;
+      }
+      const changePage = direction === 'next' ? onNext : onPrevious;
+      if (typeof ReactDOM !== 'undefined' && ReactDOM.flushSync) ReactDOM.flushSync(() => changePage());
+      else changePage();
+      page.style.transition = 'none';
+      page.style.opacity = '0.9';
+      paint(direction === 'next' ? Math.min(42, width * 0.12) : -Math.min(42, width * 0.12));
+      nextPaint(() => {
+        page.style.transition = reduced ? 'none' : `transform 300ms ${IOS_GESTURE_EASING}, opacity 220ms ease`;
+        page.style.opacity = '1';
+        paint(0);
+        timerRef.current = setTimeout(() => {
+          page.style.transition = '';
+          gestureRef.current = null;
+        }, reduced ? 5 : 315);
+      });
+    }, duration + 8);
+  }
+
+  function endGesture(cancelled = false) {
+    const g = gestureRef.current;
+    if (!g) return;
+    const progress = Math.abs(g.offset) / Math.max(1, g.width);
+    const fast = Math.abs(g.velocity) > 0.48;
+    let direction = null;
+    if (!cancelled && g.lock === 'horizontal' && (progress >= 0.22 || fast)) {
+      direction = g.offset < 0 ? 'next' : 'previous';
+    }
+    settle(g.offset, g.velocity, direction);
+  }
+
+  function onPointerDown(e) {
+    if (!enabled || e.isPrimary === false || e.button > 0) return;
+    if (e.target.closest('input, textarea, select, [data-swipe-ignore="true"], [data-horizontal-scroll="true"]')) return;
+    const root = rootRef.current;
+    if (!root) return;
+    if (timerRef.current) clearTimeout(timerRef.current);
+    const rect = root.getBoundingClientRect();
+    if (e.clientX - rect.left < edgeInset) return;
+    const page = pageRef.current;
+    const interruptedOffset = currentTranslateX(page);
+    if (page) {
+      page.style.transition = 'none';
+      page.style.opacity = '1';
+    }
+    gestureRef.current = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      lastX: e.clientX,
+      lastT: performance.now(),
+      velocity: 0,
+      offset: interruptedOffset,
+      startOffset: interruptedOffset,
+      width: rect.width,
+      lock: null,
+      didDrag: false,
+    };
+    if (e.currentTarget.setPointerCapture) e.currentTarget.setPointerCapture(e.pointerId);
+  }
+
+  function onPointerMove(e) {
+    const g = gestureRef.current;
+    if (!g || g.pointerId !== e.pointerId) return;
+    const rawDx = g.startOffset + e.clientX - g.startX;
+    const dy = e.clientY - g.startY;
+    if (!g.lock && Math.max(Math.abs(rawDx), Math.abs(dy)) > 9) {
+      g.lock = Math.abs(rawDx) > Math.abs(dy) * 1.2 ? 'horizontal' : 'vertical';
+      if (g.lock === 'vertical') {
+        gestureRef.current = null;
+        return;
+      }
+    }
+    if (g.lock !== 'horizontal') return;
+    g.didDrag = true;
+    e.preventDefault();
+    const now = performance.now();
+    const elapsed = Math.max(1, now - g.lastT);
+    const instantVelocity = (e.clientX - g.lastX) / elapsed;
+    g.velocity = g.velocity * 0.62 + instantVelocity * 0.38;
+    g.lastX = e.clientX;
+    g.lastT = now;
+    const available = rawDx < 0 ? canNext : canPrevious;
+    const dx = available ? rawDx : rawDx * 0.2;
+    g.offset = dx;
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    rafRef.current = requestAnimationFrame(() => paint(dx));
+  }
+
+  return (
+    <div
+      ref={rootRef}
+      className="ios-swipe-pager"
+      aria-label={ariaLabel}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={() => endGesture(false)}
+      onPointerCancel={() => endGesture(true)}
+      onClickCapture={(e) => {
+        if (gestureRef.current?.didDrag) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }}
+    >
+      <div ref={pageRef} className="ios-swipe-page">{children}</div>
+    </div>
+  );
+}
+
+function PullToRefresh({ children, onRefresh, enabled = true, status = 'connected' }) {
+  const rootRef = useRef(null);
+  const contentRef = useRef(null);
+  const indicatorRef = useRef(null);
+  const gestureRef = useRef(null);
+  const timerRef = useRef(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [ready, setReady] = useState(false);
+
+  function paint(distance) {
+    const content = contentRef.current;
+    const indicator = indicatorRef.current;
+    if (!content || !indicator) return;
+    content.style.transform = `translate3d(0, ${distance}px, 0)`;
+    const progress = Math.max(0, Math.min(1, distance / 62));
+    indicator.style.transform = `translate3d(-50%, ${-44 + distance * 0.78}px, 0)`;
+    indicator.style.opacity = String(progress);
+  }
+
+  function springTo(distance, done) {
+    const content = contentRef.current;
+    const indicator = indicatorRef.current;
+    if (!content || !indicator) return;
+    const duration = prefersReducedMotion() ? 1 : 360;
+    content.style.transition = `transform ${duration}ms ${IOS_GESTURE_EASING}`;
+    indicator.style.transition = `transform ${duration}ms ${IOS_GESTURE_EASING}, opacity ${duration}ms ease`;
+    paint(distance);
+    timerRef.current = setTimeout(() => {
+      content.style.transition = '';
+      indicator.style.transition = '';
+      if (done) done();
+    }, duration + 12);
+  }
+
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const onTouchStart = (e) => {
+      if (!enabled || refreshing || e.touches.length !== 1 || window.scrollY > 1) return;
+      if (e.target.closest('input, textarea, select, [data-pull-ignore="true"]')) return;
+      const t = e.touches[0];
+      gestureRef.current = { startX: t.clientX, startY: t.clientY, lock: null, distance: 0, crossed: false };
+    };
+    const onTouchMove = (e) => {
+      const g = gestureRef.current;
+      if (!g || e.touches.length !== 1) return;
+      const t = e.touches[0];
+      const dx = t.clientX - g.startX;
+      const dy = t.clientY - g.startY;
+      if (!g.lock && Math.max(Math.abs(dx), Math.abs(dy)) > 9) {
+        g.lock = dy > 0 && Math.abs(dy) > Math.abs(dx) * 1.22 ? 'vertical' : 'other';
+        if (g.lock === 'other') {
+          gestureRef.current = null;
+          return;
+        }
+      }
+      if (g.lock !== 'vertical' || dy <= 0 || window.scrollY > 1) return;
+      e.preventDefault();
+      const distance = Math.min(86, Math.pow(dy, 0.82) * 1.18);
+      g.distance = distance;
+      const crossed = distance >= 62;
+      if (crossed !== g.crossed) {
+        g.crossed = crossed;
+        setReady(crossed);
+        if (crossed) gestureFeedback('light');
+      }
+      paint(distance);
+    };
+    const finish = () => {
+      const g = gestureRef.current;
+      gestureRef.current = null;
+      if (!g) return;
+      setReady(false);
+      if (g.crossed) {
+        setRefreshing(true);
+        springTo(48);
+        const started = Date.now();
+        Promise.resolve(onRefresh ? onRefresh() : null)
+          .catch(() => null)
+          .then(() => new Promise((resolve) => setTimeout(resolve, Math.max(0, 650 - (Date.now() - started)))))
+          .then(() => {
+            springTo(0, () => {
+              setRefreshing(false);
+              paint(0);
+            });
+          });
+      } else {
+        springTo(0, () => paint(0));
+      }
+    };
+    root.addEventListener('touchstart', onTouchStart, { passive: true });
+    root.addEventListener('touchmove', onTouchMove, { passive: false });
+    root.addEventListener('touchend', finish, { passive: true });
+    root.addEventListener('touchcancel', finish, { passive: true });
+    return () => {
+      root.removeEventListener('touchstart', onTouchStart);
+      root.removeEventListener('touchmove', onTouchMove);
+      root.removeEventListener('touchend', finish);
+      root.removeEventListener('touchcancel', finish);
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, [enabled, refreshing, onRefresh]);
+
+  const label = refreshing ? (status === 'error' ? 'Reconnecting…' : 'Refreshing…') : ready ? 'Release to refresh' : 'Pull to refresh';
+  return (
+    <div ref={rootRef} className="ios-pull-refresh">
+      <div ref={indicatorRef} className="ios-refresh-indicator" aria-live="polite">
+        <RotateCcw size={16} />
+        <span>{label}</span>
+      </div>
+      <div ref={contentRef} className="ios-pull-content">{children}</div>
+    </div>
+  );
+}
+
+function DrilldownUnderlay({ title, subtitle, rows = [] }) {
+  return (
+    <div style={{ minHeight: '100%', padding: '18px 16px 110px', background: C.black }}>
+      <div className="font-display text-2xl" style={{ color: C.text }}>{title}</div>
+      {subtitle && <div className="text-xs mt-1 mb-4" style={{ color: C.muted }}>{subtitle}</div>}
+      <div className="mt-4">
+        {rows.slice(0, 6).map((row, index) => {
+          const label = typeof row === 'string' ? row : row.label;
+          const detail = typeof row === 'string' ? '' : row.detail;
+          return (
+            <div key={`${label}-${index}`} className="rounded-2xl px-4 py-3 mb-2" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
+              <div className="text-sm font-semibold truncate" style={{ color: C.text }}>{label}</div>
+              {detail && <div className="text-[11px] mt-0.5 truncate" style={{ color: C.muted }}>{detail}</div>}
+            </div>
+          );
+        })}
+        {rows.length === 0 && (
+          <div className="rounded-2xl p-4 text-sm" style={{ background: C.surface, color: C.muted, border: `1px solid ${C.border}` }}>
+            Nothing here yet.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function SectionLabel({ children }) {
   return (
     <div className="text-[11px] uppercase tracking-wide mb-2" style={{ color: C.lime }}>
@@ -2620,6 +3096,19 @@ Respond with ONLY this JSON, no other text: [{"title": "Award Name", "player": "
 
   if (dashPlayer) {
     return (
+      <InteractiveEdgeBack
+        onBack={() => setDashPlayerId(null)}
+        underlay={
+          <DrilldownUnderlay
+            title="Standings"
+            subtitle="Season leaders"
+            rows={leaderboard.map((p, index) => ({
+              label: `${index + 1}. ${p.name}`,
+              detail: `${(season.rawTotals[p.id] || 0) >= 0 ? '+' : ''}${season.rawTotals[p.id] || 0} vs quota`,
+            }))}
+          />
+        }
+      >
       <PlayerDashboard
         settings={settings}
         player={dashPlayer}
@@ -2633,7 +3122,10 @@ Respond with ONLY this JSON, no other text: [{"title": "Award Name", "player": "
         isMyPlayer={myPlayerId === dashPlayer.id}
         onSetMyPlayer={onSetMyPlayer}
         backLabel="Standings"
+        playerOrder={leaderboard}
+        onChangePlayer={setDashPlayerId}
       />
+      </InteractiveEdgeBack>
     );
   }
 
@@ -3700,6 +4192,19 @@ Respond with ONLY this JSON shape:
   }
 
   return (
+    <InteractiveEdgeBack
+      onBack={() => setShowCreate(false)}
+      underlay={
+        <DrilldownUnderlay
+          title="Casual Rounds"
+          subtitle="Casual scorecards and recaps"
+          rows={casualRounds.slice(0, 6).map((round) => ({
+            label: roundGameLabel(round),
+            detail: `${formatRoundDate(round.date)} · ${courses.find((c) => c.id === round.courseId)?.name || 'Course'}`,
+          }))}
+        />
+      }
+    >
     <div>
       <div className="grid grid-cols-2 gap-2 mb-4 rounded-2xl p-1" style={{ background: C.surface2, border: `1px solid ${C.border}` }}>
         <button onClick={() => setActiveTab('rounds')} className="rounded-xl py-2.5 text-sm font-bold tap" style={{ color: C.muted }}>League Rounds</button>
@@ -4010,6 +4515,7 @@ Respond with ONLY this JSON shape:
       </div>
 
     </div>
+    </InteractiveEdgeBack>
   );
 }
 
@@ -4179,7 +4685,24 @@ function TrendChart({ points, height = 130 }) {
   );
 }
 
-function PlayerDashboard({ settings, player, players, rounds, courses, availability, onBack, onGoCalendar, updatePlayer, isMyPlayer, onSetMyPlayer, backLabel = 'All players' }) {
+function PlayerDashboard({
+  settings,
+  player,
+  players,
+  rounds,
+  courses,
+  availability,
+  onBack,
+  onGoCalendar,
+  updatePlayer,
+  isMyPlayer,
+  onSetMyPlayer,
+  backLabel = 'All players',
+  playerOrder,
+  onChangePlayer,
+}) {
+  const scrollPositionsRef = useRef({});
+  const pendingScrollRef = useRef(null);
   const leagueRounds = finalLeagueRounds(rounds, settings);
   const season = computeSeason(settings, leagueRounds, courses, players);
 
@@ -4227,6 +4750,25 @@ function PlayerDashboard({ settings, player, players, rounds, courses, availabil
     .slice(0, 2)
     .join('')
     .toUpperCase();
+  const swipePlayers = (playerOrder && playerOrder.length ? playerOrder : players).filter((p) =>
+    players.some((candidate) => candidate.id === p.id)
+  );
+  const swipeIndex = swipePlayers.findIndex((p) => p.id === player.id);
+
+  useEffect(() => {
+    if (pendingScrollRef.current == null) return;
+    const target = pendingScrollRef.current;
+    pendingScrollRef.current = null;
+    requestAnimationFrame(() => window.scrollTo({ top: target, behavior: 'auto' }));
+  }, [player.id]);
+
+  function moveToPlayer(nextPlayer) {
+    if (!nextPlayer || !onChangePlayer) return;
+    const currentScroll = window.scrollY || 0;
+    scrollPositionsRef.current[player.id] = currentScroll;
+    pendingScrollRef.current = scrollPositionsRef.current[nextPlayer.id] ?? currentScroll;
+    onChangePlayer(nextPlayer.id);
+  }
 
   const Stat = ({ label, value, accent, sub }) => (
     <div className="rounded-2xl px-2 py-3 text-center" style={{ background: C.surface2, border: `1px solid ${C.border}` }}>
@@ -4252,6 +4794,16 @@ function PlayerDashboard({ settings, player, players, rounds, courses, availabil
         ← {backLabel}
       </button>
 
+      <HorizontalSwipePager
+        enabled={!!onChangePlayer && swipePlayers.length > 1}
+        edgeInset={32}
+        canPrevious={swipeIndex > 0}
+        canNext={swipeIndex >= 0 && swipeIndex < swipePlayers.length - 1}
+        onPrevious={() => moveToPlayer(swipePlayers[swipeIndex - 1])}
+        onNext={() => moveToPlayer(swipePlayers[swipeIndex + 1])}
+        ariaLabel={`${player.name} dashboard. Swipe left or right to view another player.`}
+      >
+      <div key={player.id}>
       {/* identity header */}
       <Card primary style={{ background: C.surface }}>
         <div className="flex items-center gap-3">
@@ -4525,6 +5077,8 @@ function PlayerDashboard({ settings, player, players, rounds, courses, availabil
           Used when refreshing handicaps against GHIN from a backup file.
         </div>
       </Card>
+      </div>
+      </HorizontalSwipePager>
     </div>
   );
 }
@@ -4591,7 +5145,18 @@ Respond with ONLY this JSON shape, no other text: {"team1": ["Full Name", ...], 
 
   const dashPlayer = dashboardPlayerId ? players.find((p) => p.id === dashboardPlayerId) : null;
   if (dashPlayer) {
+    const alphabeticalPlayers = [...players].sort((a, b) => a.name.localeCompare(b.name));
     return (
+      <InteractiveEdgeBack
+        onBack={() => setDashboardPlayerId(null)}
+        underlay={
+          <DrilldownUnderlay
+            title="Players"
+            subtitle={`${players.length} league player${players.length === 1 ? '' : 's'}`}
+            rows={alphabeticalPlayers.map((p) => ({ label: p.name, detail: `Handicap Index ${p.handicap}` }))}
+          />
+        }
+      >
       <PlayerDashboard
         settings={settings}
         player={dashPlayer}
@@ -4604,7 +5169,10 @@ Respond with ONLY this JSON shape, no other text: {"team1": ["Full Name", ...], 
         updatePlayer={updatePlayer}
         isMyPlayer={myPlayerId === dashPlayer.id}
         onSetMyPlayer={onSetMyPlayer}
+        playerOrder={alphabeticalPlayers}
+        onChangePlayer={setDashboardPlayerId}
       />
+      </InteractiveEdgeBack>
     );
   }
 
@@ -5807,6 +6375,15 @@ function LiveScoring({ settings, round, players, course, patchRound, setHoleScor
       )}
 
       {/* hole header — big number left, par/yardage right, course logo far right */}
+      <HorizontalSwipePager
+        enabled={holes.length > 1}
+        canPrevious={holeIdx > 0}
+        canNext={holeIdx < holes.length - 1}
+        onPrevious={() => setHole(Math.max(0, holeIdx - 1))}
+        onNext={() => setHole(Math.min(holes.length - 1, holeIdx + 1))}
+        ariaLabel={`Hole ${holeIdx + 1}. Swipe left for the next hole or right for the previous hole.`}
+      >
+      <div key={holeIdx}>
       <div className="flex items-end justify-between gap-3 mb-3">
         <div className="flex items-end gap-3 min-w-0">
           <div className="font-display leading-none" style={{ color: C.lime, fontSize: 68 }}>
@@ -5832,7 +6409,7 @@ function LiveScoring({ settings, round, players, course, patchRound, setHoleScor
         >
           ‹
         </button>
-        <div className="flex gap-1.5 overflow-x-auto scrollbar-hide flex-1">
+        <div data-horizontal-scroll="true" className="flex gap-1.5 overflow-x-auto scrollbar-hide flex-1">
           {holes.map((h, i) => {
             const done = isTeamScoreMode
               ? teamScoreTeams.length === 2 && teamScoreTeams.every((team) => round.gameData?.teamScores?.[team.id]?.[i] != null)
@@ -6106,6 +6683,9 @@ function LiveScoring({ settings, round, players, course, patchRound, setHoleScor
           ← Back to hole {holeIdx}
         </button>
       )}
+
+      </div>
+      </HorizontalSwipePager>
 
       {/* live scoreboard, tailored to the selected game */}
       {settings.hideLiveStandings && !revealStandings ? (
@@ -7089,6 +7669,28 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
   }
 
   const editing = rounds.find((r) => r.id === editingRoundId);
+  const editingIsCasual = !!editing?.casual;
+  const previousRoundRows = rounds
+    .filter((r) => !!r.casual === editingIsCasual && r.id !== editingRoundId)
+    .slice(0, 6)
+    .map((r) => {
+      const roundCourse = courses.find((c) => c.id === r.courseId);
+      return {
+        label: editingIsCasual ? roundGameLabel(r) : settings.leagueName,
+        detail: `${formatRoundDate(r.date)} · ${roundCourse?.name || 'Course'}`,
+      };
+    });
+  const roundUnderlay = (
+    <DrilldownUnderlay
+      title={editingIsCasual ? 'Casual Rounds' : 'League Rounds'}
+      subtitle={editingIsCasual ? 'Casual scorecards and recaps' : 'League scorecards and results'}
+      rows={previousRoundRows}
+    />
+  );
+  function backFromEditing() {
+    if (editingIsCasual) onOpenCasual();
+    else setEditingRoundId(null);
+  }
 
   if (editing && editing.status === 'live') {
     const course = courses.find((c) => c.id === editing.courseId) || courses[0];
@@ -7115,6 +7717,7 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
   if (editing && editing.status === 'final') {
     const course = courses.find((c) => c.id === editing.courseId) || courses[0];
     return (
+      <InteractiveEdgeBack onBack={backFromEditing} underlay={roundUnderlay}>
       <RoundSummary
         round={editing}
         course={course}
@@ -7128,6 +7731,7 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
         }}
         onReopen={() => patchRound(editing.id, { status: editing.logged ? 'setup' : 'live' })}
       />
+      </InteractiveEdgeBack>
     );
   }
 
@@ -7201,6 +7805,7 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
       : '—';
 
     return (
+      <InteractiveEdgeBack onBack={backFromEditing} underlay={roundUnderlay}>
       <div>
         <button onClick={() => editing.casual ? onOpenCasual() : setEditingRoundId(null)} className="text-sm font-semibold mb-3" style={{ color: C.lime }}>
           ← {editing.casual ? 'Casual Rounds' : 'League Rounds'}
@@ -8067,6 +8672,7 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
           />
         )}
       </div>
+      </InteractiveEdgeBack>
     );
   }
 
@@ -9308,6 +9914,7 @@ function DogfightLeague() {
   const [cloudStatus, setCloudStatus] = useState('disconnected'); // disconnected | connecting | connected | error | unavailable
   const [cloudError, setCloudError] = useState('');
   const [cloudLeagueId, setCloudLeagueId] = useState('');
+  const [cloudRefreshToken, setCloudRefreshToken] = useState(0);
   const dbRef = useRef(null);
   const lastSyncedRef = useRef({ players: {}, rounds: {}, availability: {}, feedback: {}, settingsJSON: null });
   // Snapshot of what THIS device held on the previous save pass. Cloud
@@ -9578,7 +10185,7 @@ function DogfightLeague() {
     return () => {
       unsubsRef.current.forEach((u) => u && u());
     };
-  }, [loading]);
+  }, [loading, cloudRefreshToken]);
 
   useEffect(() => {
     if (loading) return;
@@ -9797,6 +10404,12 @@ function DogfightLeague() {
   function logRoundFromHome() {
     createRoundFromHome(true);
   }
+  function refreshCloudData() {
+    if (RECOVERY_MODE || cloudStatus === 'unavailable') return;
+    setCloudError('');
+    setCloudStatus('connecting');
+    setCloudRefreshToken((token) => token + 1);
+  }
 
   const editingRound = activeTab === 'rounds' ? rounds.find((r) => r.id === editingRoundId) : null;
   const selectedDashboardPlayer = activeTab === 'players' && dashboardPlayerId ? players.find((p) => p.id === dashboardPlayerId) : null;
@@ -9822,6 +10435,14 @@ function DogfightLeague() {
     : activeTab === 'players'
     ? 'players'
     : 'more';
+  const pullRefreshEnabled =
+    !RECOVERY_MODE &&
+    !isLiveRoundMode &&
+    !menuOpen &&
+    !editingRoundId &&
+    !dashboardPlayerId &&
+    cloudStatus !== 'unavailable' &&
+    ['home', 'rounds', 'standings', 'skins', 'calendar', 'players'].includes(activeTab);
 
   return (
     <div style={{ maxWidth: 480, margin: '0 auto', minHeight: '100vh', background: C.black }}>
@@ -9868,11 +10489,45 @@ function DogfightLeague() {
         .check-pop { animation: checkPop 0.22s cubic-bezier(0.34,1.56,0.64,1) both; }
         .float-particle { position: absolute; animation: floatUp 1.4s ease-out forwards; pointer-events: none; }
 
+        .ios-edge-back { position: relative; min-height: 60vh; overflow: clip; isolation: isolate; touch-action: pan-y; }
+        .ios-edge-underlay { position: absolute; inset: 0; z-index: 0; background: ${C.black}; transform: translate3d(-18%,0,0); opacity: 0.72; pointer-events: none; will-change: transform, opacity; }
+        .ios-edge-page { position: relative; z-index: 1; min-height: 60vh; background: ${C.black}; will-change: transform; backface-visibility: hidden; }
+        .ios-swipe-pager { position: relative; overflow: clip; touch-action: pan-y; }
+        .ios-swipe-page { position: relative; width: 100%; will-change: transform, opacity; backface-visibility: hidden; }
+        .ios-pull-refresh { position: relative; overscroll-behavior-y: contain; }
+        .ios-pull-content { position: relative; z-index: 1; will-change: transform; backface-visibility: hidden; }
+        .ios-refresh-indicator {
+          position: absolute;
+          z-index: 0;
+          top: 0;
+          left: 50%;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          min-height: 34px;
+          padding: 6px 11px;
+          border-radius: 999px;
+          background: ${C.surface};
+          border: 1px solid ${C.border};
+          color: ${C.muted};
+          box-shadow: 0 4px 12px ${C.shadow};
+          font-size: 11px;
+          font-weight: 700;
+          white-space: nowrap;
+          opacity: 0;
+          transform: translate3d(-50%,-44px,0);
+          transform-origin: center;
+          pointer-events: none;
+          will-change: transform, opacity;
+        }
         .tap { transition: transform 0.12s ease, opacity 0.12s ease, background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease; -webkit-tap-highlight-color: transparent; }
         .tap:active { transform: scale(0.94); }
         button { transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease; }
         button:not(:disabled):active { transform: scale(0.96); }
         a, button, [role="button"] { -webkit-tap-highlight-color: transparent; }
+        @media (prefers-reduced-motion: reduce) {
+          .ios-edge-page, .ios-edge-underlay, .ios-swipe-page, .ios-pull-content, .ios-refresh-indicator { transition-duration: 1ms !important; }
+        }
       `}</style>
       <div className="app-root min-h-screen">
         {!isLiveRoundMode && activeTab !== 'home' && (
@@ -9987,6 +10642,11 @@ function DogfightLeague() {
           </div>
         )}
 
+        <PullToRefresh
+          enabled={pullRefreshEnabled}
+          status={cloudStatus}
+          onRefresh={refreshCloudData}
+        >
         <div
           key={activeTab}
           className={isLiveRoundMode ? 'px-4 pt-3' : 'px-4 pt-4 tab-fade-in'}
@@ -10089,6 +10749,7 @@ function DogfightLeague() {
           )}
           {activeTab === 'howitworks' && <HowItWorksTab settings={settings} />}
         </div>
+        </PullToRefresh>
 
         {!isLiveRoundMode && (
           <nav
