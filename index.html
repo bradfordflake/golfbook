@@ -283,6 +283,7 @@ const APP_VERSION = '2026.07.30-feedback';
 // the cloud state down and overwrites the local copy about half a second later.
 const RECOVERY_MODE = typeof window !== 'undefined' && /[?&](recover|offline)\b/.test(window.location.search);
 const CLOUD_CONFIG_KEY = 'dfl:cloud-config';
+const DEFAULT_LEAGUE_ID = 'Dogfight League';
 
 const DEFAULT_FIREBASE_CONFIG = {
   apiKey: 'AIzaSyCEUwoGcIFsioaYXplXiR-w8NC5mJzRNCI',
@@ -331,6 +332,12 @@ function clearCloudConfig() {
   try {
     localStorage.removeItem(CLOUD_CONFIG_KEY);
   } catch (e) {}
+}
+function normalizeLeagueId(value, useBuiltInProject = false) {
+  const cleaned = String(value || '').trim().replace(/\//g, '-');
+  const equivalentToDefault =
+    cleaned.replace(/[\s-]+/g, ' ').toLowerCase() === DEFAULT_LEAGUE_ID.toLowerCase();
+  return useBuiltInProject && equivalentToDefault ? DEFAULT_LEAGUE_ID : cleaned;
 }
 
 // ---------- built-in courses ----------
@@ -517,7 +524,7 @@ const GAME_LIBRARY = [
   { id: 'skins', name: 'Skins', min: 2, max: 8, ideal: [3, 4], tags: ['per-hole', 'drama'], blurb: 'Win a hole outright to bank the skin — ties carry over and stack.', rules: 'Every hole is worth one skin. Lowest score wins it, but only if outright — any tie rolls the skin to the next hole, so a few carryovers can make one putt worth five holes of money. Works gross or net with handicaps.', bet: 'Fix a $ value per skin, settle at the end. Value carryovers make the back nine wild.', scoring: 'skins' },
   { id: 'stroke', name: 'Stroke Play', min: 2, max: 8, ideal: [2, 3], tags: ['classic'], blurb: 'Count every shot — lowest total wins. The purest test.', rules: 'Add up all strokes for the round; lowest gross (or net, applying course handicaps) wins. Simple, but one disaster hole can end your day, which is why groups often layer another game on top.', bet: 'Flat amount to the winner, or $ per stroke difference between players.', scoring: 'stroke' },
   { id: 'stableford', name: 'Stableford', min: 2, max: 8, ideal: [3, 4, 5], tags: ['points', 'mixed skill'], blurb: 'Points per hole (par 2, birdie 3…) — a blow-up hole can\'t sink you.', rules: 'Score points on each hole relative to par: double bogey or worse 0, bogey 1, par 2, birdie 3, eagle 4. Highest points total wins. Encourages aggressive play since a triple costs no more than a double.', bet: 'Flat bet to the winner, or $ per point separating each player.', scoring: 'stableford' },
-  { id: 'quota', name: 'Quota (Dogfight)', min: 3, max: 8, ideal: [4, 5, 6], tags: ['points', 'mixed skill'], blurb: 'Beat your personal points target — your league\'s home format.', rules: 'Each player gets a quota (36 − handicap) and earns Stableford points during the round. Finish is ranked by points over/under your own quota, so a 15-handicap and a 3-handicap compete dead even. This is the same format as your Dogfight League — for a league round, choose League Rounds from the Rounds shortcut instead.', bet: 'Everyone antes; best +/- vs. quota takes the pot or splits by finish.', scoring: 'quota' },
+  { id: 'quota', name: 'Quota (Dogfight)', min: 3, max: 8, ideal: [4, 5, 6], tags: ['points', 'mixed skill'], blurb: 'Beat your personal points target — your league\'s home format.', rules: 'Each player gets a course-adjusted quota (36 − Course Handicap for the selected tee) and earns gross Stableford points during the round. Finish is ranked by points over/under your own quota, so golfers of different abilities compete evenly without applying handicap strokes a second time. This is the same format as your Dogfight League — for a league round, choose League Rounds from the Rounds shortcut instead.', bet: 'Everyone antes; best +/- vs. quota takes the pot or splits by finish.', scoring: 'quota' },
   { id: 'nines', name: 'Nines (5-3-1)', min: 3, max: 3, ideal: [3], tags: ['per-hole', 'threesome special'], blurb: 'Built for exactly 3 — nine points split every hole.', rules: 'Each hole splits 9 points: 5 for the best score, 3 for second, 1 for worst. Ties split the pool (e.g. two tied for low take 4 each). Everyone stays live on every hole, which is why it\'s the go-to threesome game. Fun variant: an outright birdie win takes 7-1-1.', bet: 'Settle $ per point difference at the end.', scoring: 'nines' },
   { id: 'wolf', name: 'Wolf', min: 3, max: 5, ideal: [4], tags: ['team', 'strategy'], blurb: 'Rotating captain picks a partner after tee shots — or goes lone wolf.', rules: 'The Wolf rotates each hole and tees off last. After watching each drive, the Wolf either picks that player as a partner (2v2, best ball) or passes; passing everyone means going Lone Wolf, 1v3 for double points. Points swing on best ball per side. Variants exist for 3 and 5 players.', bet: 'Common: partner win 2 pts each, lone wolf win 6, lone wolf loss pays the field 2 each. $ per point.', scoring: 'wolf' },
   { id: 'vegas', name: 'Vegas', min: 4, max: 4, ideal: [4], tags: ['team', 'high stakes'], blurb: '2v2 where scores combine into a two-digit number — huge swings.', rules: 'Teams of two pair (not add) their scores: a 4 and a 5 becomes 45, low number first. Lowest team number wins the difference in points (45 vs 56 = 11 points). If someone makes 10+, their team\'s number flips high-first (10 and 4 = 104). Some groups flip the loser\'s digits on a birdie — brutal.', bet: 'Pick a small $ per point — swings stack up much faster than you expect.', scoring: 'vegas', pairing: true },
@@ -2041,7 +2048,7 @@ function AiStatusCard({ aiStatus, aiErrorMsg }) {
 }
 
 function CloudSyncCard({ cloudStatus, cloudError, cloudLeagueId }) {
-  const [leagueIdInput, setLeagueIdInput] = useState('Dogfight League');
+  const [leagueIdInput, setLeagueIdInput] = useState(DEFAULT_LEAGUE_ID);
   const [useCustom, setUseCustom] = useState(false);
   const [configText, setConfigText] = useState('');
   const [localErr, setLocalErr] = useState('');
@@ -2069,6 +2076,7 @@ function CloudSyncCard({ cloudStatus, cloudError, cloudLeagueId }) {
   const isConnected = cloudStatus === 'connected';
   const isUnavailable = cloudStatus === 'unavailable';
   const isConnecting = cloudStatus === 'connecting';
+  const isPermissionError = cloudStatus === 'error' && /permission/i.test(cloudError || '');
 
   function connect() {
     setLocalErr('');
@@ -2087,7 +2095,7 @@ function CloudSyncCard({ cloudStatus, cloudError, cloudLeagueId }) {
         return;
       }
     }
-    const cleanLeagueId = leagueIdInput.trim().replace(/[\s/]+/g, '-').toLowerCase();
+    const cleanLeagueId = normalizeLeagueId(leagueIdInput, !useCustom);
     saveCloudConfig({ ...cfg, leagueId: cleanLeagueId });
     window.location.reload();
   }
@@ -2135,7 +2143,16 @@ service cloud.firestore {
           Cloud sync can't run in this in-chat preview (the sandbox won't load the Firebase SDK). It works in the downloadable app and your hosted Vercel link.
         </InfoNote>
       )}
-      {cloudStatus === 'error' && <InfoNote>Connection error: {cloudError || 'something went wrong reaching Firestore.'}</InfoNote>}
+      {cloudStatus === 'error' && (
+        <InfoNote>
+          Connection error: {cloudError || 'something went wrong reaching Firestore.'}
+          {isPermissionError && (
+            <div className="mt-2">
+              Reconnect using the exact shared League ID <b style={{ color: C.text }}>{DEFAULT_LEAGUE_ID}</b>. If the error remains, the Firebase project's Firestore rules need to be republished.
+            </div>
+          )}
+        </InfoNote>
+      )}
 
       {isConnected ? (
         <>
@@ -2207,7 +2224,7 @@ service cloud.firestore {
               disabled={!leagueIdInput.trim() || (useCustom && !configText.trim())}
               style={{ width: '100%', textAlign: 'center', marginTop: 8 }}
             >
-              Connect
+              {cloudStatus === 'error' ? `Reconnect to ${DEFAULT_LEAGUE_ID}` : 'Connect'}
             </PrimaryButton>
           </>
         )
@@ -4600,7 +4617,7 @@ Respond with ONLY this JSON shape, no other text: {"team1": ["Full Name", ...], 
               Players
             </div>
             <p className="text-xs mt-1" style={{ color: C.muted }}>
-              Quota auto-calculates as {settings.quotaBase} − handicap. Edit a handicap anytime.
+              Base quota is {settings.quotaBase} − Handicap Index. The playing quota is course- and tee-adjusted, then shown during round setup.
             </p>
           </div>
           <GhostButton onClick={() => setShowGhinInfo((v) => !v)} color={C.lime}>
@@ -4639,7 +4656,7 @@ Respond with ONLY this JSON shape, no other text: {"team1": ["Full Name", ...], 
           <div style={{ minWidth: settings.teamsEnabled ? 620 : 540 }}>
             <div className={`grid ${settings.teamsEnabled ? 'grid-cols-7' : 'grid-cols-6'} gap-2 text-[10px] uppercase tracking-wide pb-2`} style={{ color: C.muted, borderBottom: `1px solid ${C.border}` }}>
               <div className="col-span-2">Player</div>
-              <div>Quota</div>
+              <div>Base quota</div>
               <div>Handicap</div>
               {settings.teamsEnabled && <div>Team</div>}
               <div>GHIN</div>
@@ -9181,7 +9198,7 @@ function HowItWorksTab({ settings }) {
           <li>Eagle = <b>4</b>, Albatross = <b>5</b></li>
         </ul>
         <p className="text-xs mt-2" style={{ color: C.faint }}>
-          Add them up for your round total. In Hole-by-hole entry the app totals these for you automatically.
+          Add them up for your round total. Enter each player's actual gross score; the handicap adjustment is already built into the quota, so the app does not subtract handicap strokes again. In Hole-by-hole entry the app totals the points automatically.
         </p>
       </Card>
 
@@ -9190,7 +9207,7 @@ function HowItWorksTab({ settings }) {
           2. Quota
         </div>
         <p className="text-sm" style={{ color: C.muted }}>
-          This league sets Quota = {settings.quotaBase} − handicap. A 14-handicap has a quota of {settings.quotaBase - 14}; a 4-handicap has a quota of {settings.quotaBase - 4}. The lower the handicap, the higher the bar.
+          A Handicap Index is first converted to a Course Handicap using the selected tee's rating, slope and course par. The playing quota is then {settings.quotaBase} − Course Handicap. Because Course Handicap changes by course and tee, the Players screen shows only a Base Quota; the final playing quota appears during round setup.
         </p>
       </Card>
 
@@ -9205,7 +9222,7 @@ function HowItWorksTab({ settings }) {
 
       <Card>
         <div className="font-display text-lg mb-2" style={{ color: C.lime }}>
-          4. The money (three games at once)
+          4. Money and season standings
         </div>
         <ul className="text-sm space-y-2" style={{ color: C.muted }}>
           <li>
@@ -9213,6 +9230,9 @@ function HowItWorksTab({ settings }) {
           </li>
           <li>
             <b style={{ color: C.text }}>Skins:</b> a separate opt-in game (currently ${settings.skinsBuyIn} buy-in). Only players who opt in that round pay in and can win.
+          </li>
+          <li>
+            <b style={{ color: C.text }}>Trash:</b> an optional side game for greenies, sandies, polies, barkies, chip-ins and other agreed achievements (currently ${settings.trashValue} per item). Only opted-in players participate.
           </li>
           <li>
             <b style={{ color: C.text }}>Season standings:</b> ranked by cumulative points above or below quota. Your best {settings.topScoresCounted} quota results count toward the season title.
@@ -9230,12 +9250,13 @@ function HowItWorksTab({ settings }) {
           5. Running a round day-of
         </div>
         <ul className="text-sm space-y-2" style={{ color: C.muted }}>
-          <li>Collect buy-ins. Confirm everyone's quota (auto-shown on the Players tab).</li>
-          <li>Play. Track points; if you want skins, keep each player's hole-by-hole gross.</li>
+          <li>Open <b style={{ color: C.text }}>Rounds → League Rounds</b> and start a new round, or choose Log Scorecard if the round was kept on paper.</li>
+          <li>Confirm the course, tees, players and optional side games. The app shows each player's course-adjusted playing quota.</li>
+          <li>Enter each player's actual gross score. The app converts those scores into Dogfight points automatically.</li>
           <li>
-            After the round, open <b style={{ color: C.text }}>Rounds → League Rounds</b>, create the round, and enter points (and hole scores for skins).
+            At the end, press <b style={{ color: C.text }}>Finish Round</b>. Until that button is pressed, the round remains live or in setup and does not affect standings, season money, skins history or player dashboards.
           </li>
-          <li>The app ranks everyone, splits the purse and skins, and updates the season standings automatically.</li>
+          <li>After finalization, the app ranks everyone, settles enabled games and updates the season automatically.</li>
         </ul>
       </Card>
 
@@ -9244,7 +9265,7 @@ function HowItWorksTab({ settings }) {
           Playing 9 holes & combining nines
         </div>
         <p className="text-sm" style={{ color: C.muted }}>
-          Set any round to 9 holes and quotas automatically halve. If you play two nines you want scored as one 18, open one and choose the other under <b style={{ color: C.text }}>Combine with</b> — the app sums both nines into a combined 18 that counts as a single event in the season standings. Each nine still settles its own purse and skins.
+          Set any round to 9 holes and quotas automatically halve. If two nines should count as one 18-hole event, open one and choose the other under <b style={{ color: C.text }}>Combine with</b>. The app combines both results for one season event and charges one weekly buy-in per player, creating one purse for the day. Skins and trash remain attached to the individual nine-hole scorecards where they were recorded.
         </p>
       </Card>
     </div>
@@ -9368,8 +9389,15 @@ function DogfightLeague() {
     // Use a saved custom config if the user pasted one; otherwise fall back to the
     // app's built-in Firebase project so every device shares one league by default.
     let cfg = loadCloudConfig();
+    if (cfg && cfg.projectId === DEFAULT_FIREBASE_CONFIG.projectId) {
+      const canonicalLeagueId = normalizeLeagueId(cfg.leagueId, true);
+      if (canonicalLeagueId && canonicalLeagueId !== cfg.leagueId) {
+        cfg = { ...cfg, leagueId: canonicalLeagueId };
+        saveCloudConfig(cfg);
+      }
+    }
     if (!cfg) {
-      cfg = { ...DEFAULT_FIREBASE_CONFIG, leagueId: 'Dogfight League' };
+      cfg = { ...DEFAULT_FIREBASE_CONFIG, leagueId: DEFAULT_LEAGUE_ID };
     }
     if (!fbAvailable()) {
       setCloudStatus('unavailable');
