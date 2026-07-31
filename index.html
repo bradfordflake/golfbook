@@ -9,9 +9,30 @@
 <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:wght@400;500;600;700;800&family=Barlow+Semi+Condensed:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <title>Dogfight League</title>
 <script src="https://cdn.tailwindcss.com"></script>
+<!-- Each library below is loaded from unpkg, then immediately checked. If the
+     download failed (flaky network, blocked CDN, half-loaded on hotel wifi),
+     the same file is pulled from jsDelivr instead. document.write is used
+     deliberately: it runs during parsing, so the fallback lands in the right
+     order and is guaranteed to finish before the app script runs. Without this,
+     one missing file produced a blank screen with no explanation. -->
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script>
+  if (!window.React) {
+    document.write('<script crossorigin src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"><\/script>');
+  }
+</script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script>
+  if (!window.ReactDOM) {
+    document.write('<script crossorigin src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"><\/script>');
+  }
+</script>
 <script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+<script>
+  if (!window.Babel) {
+    document.write('<script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"><\/script>');
+  }
+</script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
 <script type="module">
@@ -231,6 +252,95 @@ function applySparse(base, delta) {
   });
   return out;
 }
+// Arrays are the one shape neither sparseDiff nor Firestore's { merge: true }
+// can combine — both treat an array as a single indivisible value, so the last
+// writer silently wins. These three fields are edited by several people at once
+// during round setup, and a dropped id here quietly changes who is in the round
+// or who is in the skins/trash pot. They get a proper three-way merge instead.
+const CONCURRENT_ID_LIST_FIELDS = ['playerIds', 'skinsOptIn', 'trashOptIn'];
+// Three-way merge of a list of ids: start from what the cloud has, drop anyone
+// this device deliberately removed, then re-add anyone this device added.
+function threeWayIdList(baseArr, localArr, incomingArr) {
+  if (!Array.isArray(localArr) || !Array.isArray(incomingArr)) return undefined;
+  if (!Array.isArray(baseArr)) {
+    // No common ancestor (cold start). We cannot tell an intentional removal
+    // apart from an id this device never saw, so union: a stray extra player is
+    // visible and one tap to fix, a silently missing one is not.
+    const unioned = incomingArr.slice();
+    localArr.forEach((id) => {
+      if (!unioned.includes(id)) unioned.push(id);
+    });
+    return unioned;
+  }
+  const baseSet = new Set(baseArr);
+  const localSet = new Set(localArr);
+  const removedLocally = new Set(baseArr.filter((id) => !localSet.has(id)));
+  const addedLocally = localArr.filter((id) => !baseSet.has(id));
+  const out = incomingArr.filter((id) => !removedLocally.has(id));
+  addedLocally.forEach((id) => {
+    if (!out.includes(id)) out.push(id);
+  });
+  return out;
+}
+// Same idea for guest players, which are objects rather than bare ids.
+function threeWayGuestList(baseArr, localArr, incomingArr) {
+  if (!Array.isArray(localArr) || !Array.isArray(incomingArr)) return undefined;
+  const hasBase = Array.isArray(baseArr);
+  const localIds = new Set(localArr.map((g) => g && g.id));
+  const baseIds = new Set((hasBase ? baseArr : []).map((g) => g && g.id));
+  const removedLocally = hasBase
+    ? new Set(baseArr.map((g) => g && g.id).filter((id) => !localIds.has(id)))
+    : new Set();
+  const out = incomingArr.filter((g) => !removedLocally.has(g && g.id));
+  const seen = new Set(out.map((g) => g && g.id));
+  localArr.forEach((g) => {
+    if (!g || seen.has(g.id)) return;
+    if (hasBase && baseIds.has(g.id)) return; // existed before and the cloud dropped it
+    out.push(g);
+    seen.add(g.id);
+  });
+  return out;
+}
+function mergeConcurrentLists(base, loc, inc, merged) {
+  let out = merged;
+  const put = (field, value) => {
+    if (value === undefined) return;
+    if (JSON.stringify(value) === JSON.stringify(out[field])) return;
+    if (out === merged) out = { ...merged };
+    out[field] = value;
+  };
+  CONCURRENT_ID_LIST_FIELDS.forEach((field) => {
+    put(field, threeWayIdList(base && base[field], loc[field], inc[field]));
+  });
+  put('guestPlayers', threeWayGuestList(base && base.guestPlayers, loc.guestPlayers, inc.guestPlayers));
+  return out;
+}
+// A finalized snapshot arrived from another device while this one still had
+// scores that never reached the cloud. The snapshot is authoritative, but the
+// typed scores must not evaporate: carry them into playerData and flag the
+// round so the organizer knows the results need re-finalizing.
+function adoptFinalizedSnapshot(base, loc, inc) {
+  const scoreDelta = base ? sparseDiff(base.playerData, loc.playerData) : undefined;
+  if (scoreDelta === undefined) return inc;
+  return {
+    ...inc,
+    playerData: applySparse(inc.playerData, scoreDelta),
+    revisionPending: true,
+  };
+}
+// Two devices finalized the same round independently, so both snapshots claim
+// the same revision number. Blending them would invent a scorecard that neither
+// device ever produced. Pick ONE whole snapshot, using a rule that every device
+// computes identically so they all converge on the same answer.
+function pickFinalizedSnapshot(loc, inc) {
+  const localJSON = JSON.stringify(loc.finalSnapshot);
+  const incomingJSON = JSON.stringify(inc.finalSnapshot);
+  if (localJSON === incomingJSON) return inc;
+  const localAt = loc.finalSnapshot?.finalizedAt || '';
+  const incomingAt = inc.finalSnapshot?.finalizedAt || '';
+  if (localAt !== incomingAt) return localAt > incomingAt ? loc : inc;
+  return localJSON > incomingJSON ? loc : inc; // stable, device-independent
+}
 // Reconciles an incoming cloud snapshot with local state, replaying any
 // not-yet-pushed local edits on top so a snapshot can never silently discard
 // what someone just typed.
@@ -243,24 +353,33 @@ function reconcileFromCloud(localList, incomingList, prevSyncedMap, knownCloudId
   const out = incomingList.map((inc) => {
     const loc = localById[inc.id];
     if (!loc) return inc;
+    const lastJSON = prevSyncedMap[inc.id];
+    const localJSON = JSON.stringify(loc);
+    const hasUnsavedLocalEdits = lastJSON !== undefined && lastJSON !== localJSON;
+    let base = null;
+    if (lastJSON !== undefined) {
+      try {
+        base = JSON.parse(lastJSON);
+      } catch (e) {
+        base = null;
+      }
+    }
     const localRevision = Number(loc.finalSnapshot?.snapshotRevision) || 0;
     const incomingRevision = Number(inc.finalSnapshot?.snapshotRevision) || 0;
     if (localRevision || incomingRevision) {
       // Finalized snapshots are revisioned documents, not concurrent score
       // entry trees. The highest intentional revision wins as one unit.
       if (localRevision > incomingRevision) return loc;
-      if (incomingRevision > localRevision) return inc;
+      if (incomingRevision > localRevision) {
+        return hasUnsavedLocalEdits ? adoptFinalizedSnapshot(base, loc, inc) : inc;
+      }
+      // Equal, non-zero revisions means two devices finalized independently.
+      if (localRevision > 0) return pickFinalizedSnapshot(loc, inc);
     }
-    const lastJSON = prevSyncedMap[inc.id];
-    if (lastJSON === JSON.stringify(loc)) return inc; // nothing unsaved locally
-    let base;
-    try {
-      base = lastJSON ? JSON.parse(lastJSON) : {};
-    } catch (e) {
-      base = {};
-    }
-    const delta = sparseDiff(base, loc);
-    return applySparse(inc, delta);
+    if (lastJSON === localJSON) return inc; // nothing unsaved locally
+    const delta = sparseDiff(base || {}, loc);
+    const merged = applySparse(inc, delta);
+    return mergeConcurrentLists(base, loc, inc, merged);
   });
   // Decide what to do with local entries the snapshot doesn't contain. There
   // are two very different cases and they look identical without prevSyncedMap:
@@ -284,7 +403,7 @@ function reconcileFromCloud(localList, incomingList, prevSyncedMap, knownCloudId
 
 const STORAGE_KEY = 'dogfight-league';
 const MY_PLAYER_KEY = 'dfl:my-player-id'; // local to this device, never synced league-wide
-const APP_VERSION = '2026.07.30-final-snapshots';
+const APP_VERSION = '2026.07.31-concurrency-hardening+cdn-fallback';
 // Recovery / offline mode. Open the app with ?recover in the URL to load ONLY
 // this device's local data and never connect to the cloud. Used to rescue
 // scores from a device after a bad sync: without this, opening the app pulls
@@ -9539,9 +9658,18 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
                   ✎ LOGGING
                 </span>
               )}
-              {r.status === 'final' && (
+              {r.status === 'final' && !r.revisionPending && (
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-bold" style={{ background: C.limeSoft, color: C.lime, border: `1px solid ${C.lime}` }}>
                   ✓ COMPLETE
+                </span>
+              )}
+              {r.status === 'final' && r.revisionPending && (
+                <span
+                  className="px-2 py-0.5 rounded-full text-[10px] font-bold"
+                  style={{ background: C.surface2, color: C.orange, border: `1px solid ${C.orange}` }}
+                  title="A score arrived from another phone after this round was finalized. Reopen and finalize again to update the results."
+                >
+                  ⚠ NEEDS RE-FINALIZE
                 </span>
               )}
               {(!r.status || r.status === 'setup') && (
@@ -10083,7 +10211,11 @@ function SettingsTab({ settings, setSettings, players, setPlayers, courses, roun
     setRounds((rs) =>
       rs.map((round) => {
         const finalSnapshot = round.finalSnapshot;
-        const remapped = remapPlayerIds({ ...round, finalSnapshot: undefined }, plan.idMap);
+        // Strip the key entirely rather than setting it to undefined — an
+        // undefined value would otherwise be handed straight to Firestore.
+        const withoutSnapshot = { ...round };
+        delete withoutSnapshot.finalSnapshot;
+        const remapped = remapPlayerIds(withoutSnapshot, plan.idMap);
         return finalSnapshot ? { ...remapped, finalSnapshot } : remapped;
       })
     );
@@ -10855,6 +10987,14 @@ function DogfightLeague() {
     try {
       if (!window.firebase.apps.length) window.firebase.initializeApp(cfg);
       const db = window.firebase.firestore();
+      // Firestore throws on an `undefined` value anywhere in a document, and a
+      // single throw rejects the entire batch — so one stray key would stop all
+      // syncing mid-round. Treat undefined as "leave this field alone" instead.
+      try {
+        db.settings({ ignoreUndefinedProperties: true });
+      } catch (e) {
+        // settings() can only be called before the first use; ignore if already set.
+      }
       dbRef.current = db;
       const base = db.collection('leagues').doc(cfg.leagueId);
       const onErr = (err) => {
@@ -11643,7 +11783,140 @@ function DogfightLeague() {
 }
 
 
-ReactDOM.createRoot(document.getElementById('root')).render(<DogfightLeague />);
+// Without this, any render error anywhere in the app unmounts everything and
+// leaves a blank white screen — indistinguishable from a crash when you're
+// standing on the 14th tee. Scores are already safe in localStorage and the
+// cloud at this point; the job here is to say so and offer a way back.
+class AppErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  componentDidCatch(error, info) {
+    try {
+      console.error('Dogfight League render error:', error, info);
+    } catch (e) {
+      /* console may be unavailable */
+    }
+  }
+  render() {
+    if (!this.state.error) return this.props.children;
+    const wrap = {
+      minHeight: '100vh',
+      background: '#0B1220',
+      color: '#F8FAFC',
+      padding: 24,
+      fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
+      display: 'flex',
+      flexDirection: 'column',
+      justifyContent: 'center',
+      gap: 14,
+    };
+    const btn = {
+      width: '100%',
+      height: 52,
+      borderRadius: 16,
+      border: 'none',
+      fontWeight: 700,
+      fontSize: 16,
+      cursor: 'pointer',
+    };
+    return (
+      <div style={wrap}>
+        <div style={{ fontSize: 22, fontWeight: 800 }}>Something went wrong on this screen</div>
+        <div style={{ fontSize: 15, lineHeight: 1.5, color: '#CBD5E1' }}>
+          Your scores are safe. They are saved on this phone and, if you were online, in the
+          league cloud. Reloading will bring them back.
+        </div>
+        <button style={{ ...btn, background: '#A3E635', color: '#0B1220' }} onClick={() => window.location.reload()}>
+          Reload the app
+        </button>
+        <button
+          style={{ ...btn, background: 'transparent', color: '#94A3B8', border: '1px solid #334155' }}
+          onClick={() => {
+            window.location.href = window.location.pathname + '?recover';
+          }}
+        >
+          Open in recovery mode (this phone's data only)
+        </button>
+        <details style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>
+          <summary style={{ cursor: 'pointer' }}>Technical details</summary>
+          <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', marginTop: 8 }}>
+            {String((this.state.error && this.state.error.stack) || this.state.error)}
+          </pre>
+        </details>
+      </div>
+    );
+  }
+}
+
+// Mount defensively. If a CDN file went missing despite the fallbacks above,
+// say which one plainly rather than dying with a bare console error.
+(function mountApp() {
+  const rootEl = document.getElementById('root');
+  const missing = [];
+  if (typeof React === 'undefined') missing.push('React');
+  if (typeof ReactDOM === 'undefined' || !ReactDOM.createRoot) missing.push('ReactDOM');
+  if (missing.length) {
+    window.__dflBootError = missing.join(' and ') + ' failed to load';
+    if (rootEl) {
+      rootEl.innerHTML =
+        '<div style="min-height:100vh;background:#0B1220;color:#F8FAFC;padding:24px;' +
+        'font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;display:flex;' +
+        'flex-direction:column;justify-content:center;gap:14px">' +
+        '<div style="font-size:22px;font-weight:800">Couldn\'t finish loading</div>' +
+        '<div style="font-size:15px;line-height:1.5;color:#CBD5E1">' +
+        missing.join(' and ') +
+        ' didn\'t download. This is a network problem, not your data — every score is still ' +
+        'saved on this phone and in the league cloud. Check your signal and reload.</div>' +
+        '<button onclick="window.location.reload()" style="width:100%;height:52px;' +
+        'border-radius:16px;border:none;background:#A3E635;color:#0B1220;font-weight:700;' +
+        'font-size:16px;cursor:pointer">Reload the app</button></div>';
+    }
+    return;
+  }
+  ReactDOM.createRoot(rootEl).render(
+    <AppErrorBoundary>
+      <DogfightLeague />
+    </AppErrorBoundary>
+  );
+})();
+</script>
+<!-- Last-resort watchdog. If Babel itself never loaded, the app script above is
+     never compiled or run at all, so none of its own error handling exists.
+     This plain script always runs; if nothing has rendered shortly after load,
+     it explains why instead of leaving a blank white screen. -->
+<script>
+  (function bootWatchdog() {
+    function check() {
+      var rootEl = document.getElementById('root');
+      if (!rootEl || rootEl.children.length > 0) return;
+      var reason = window.__dflBootError;
+      if (!reason) {
+        var missing = [];
+        if (typeof React === 'undefined') missing.push('React');
+        if (typeof ReactDOM === 'undefined') missing.push('ReactDOM');
+        if (typeof Babel === 'undefined') missing.push('Babel');
+        reason = missing.length ? missing.join(', ') + ' failed to load' : 'the app did not start';
+      }
+      rootEl.innerHTML =
+        '<div style="min-height:100vh;background:#0B1220;color:#F8FAFC;padding:24px;' +
+        'font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;display:flex;' +
+        'flex-direction:column;justify-content:center;gap:14px">' +
+        '<div style="font-size:22px;font-weight:800">Couldn\'t finish loading</div>' +
+        '<div style="font-size:15px;line-height:1.5;color:#CBD5E1">' + reason +
+        '. Your scores are safe on this phone and in the league cloud. ' +
+        'Check your signal and reload.</div>' +
+        '<button onclick="window.location.reload()" style="width:100%;height:52px;' +
+        'border-radius:16px;border:none;background:#A3E635;color:#0B1220;font-weight:700;' +
+        'font-size:16px;cursor:pointer">Reload the app</button></div>';
+    }
+    if (document.readyState === 'complete') setTimeout(check, 4000);
+    else window.addEventListener('load', function () { setTimeout(check, 4000); });
+  })();
 </script>
 </body>
 </html>
