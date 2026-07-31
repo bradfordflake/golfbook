@@ -243,6 +243,14 @@ function reconcileFromCloud(localList, incomingList, prevSyncedMap, knownCloudId
   const out = incomingList.map((inc) => {
     const loc = localById[inc.id];
     if (!loc) return inc;
+    const localRevision = Number(loc.finalSnapshot?.snapshotRevision) || 0;
+    const incomingRevision = Number(inc.finalSnapshot?.snapshotRevision) || 0;
+    if (localRevision || incomingRevision) {
+      // Finalized snapshots are revisioned documents, not concurrent score
+      // entry trees. The highest intentional revision wins as one unit.
+      if (localRevision > incomingRevision) return loc;
+      if (incomingRevision > localRevision) return inc;
+    }
     const lastJSON = prevSyncedMap[inc.id];
     if (lastJSON === JSON.stringify(loc)) return inc; // nothing unsaved locally
     let base;
@@ -276,7 +284,7 @@ function reconcileFromCloud(localList, incomingList, prevSyncedMap, knownCloudId
 
 const STORAGE_KEY = 'dogfight-league';
 const MY_PLAYER_KEY = 'dfl:my-player-id'; // local to this device, never synced league-wide
-const APP_VERSION = '2026.07.30-feedback';
+const APP_VERSION = '2026.07.30-final-snapshots';
 // Recovery / offline mode. Open the app with ?recover in the URL to load ONLY
 // this device's local data and never connect to the cloud. Used to rescue
 // scores from a device after a bad sync: without this, opening the app pulls
@@ -755,7 +763,58 @@ function ScoreMark({ strokes, par, size = 19, fontSize = 11 }) {
     </span>
   );
 }
+const FINAL_SNAPSHOT_SCHEMA_VERSION = 1;
+const PLAYING_SNAPSHOT_SCHEMA_VERSION = 1;
+
+function immutableFinalSnapshot(round) {
+  return !round?.casual && round?.status === 'final' && round?.finalSnapshot?.schemaVersion
+    ? round.finalSnapshot
+    : null;
+}
+function activePlayingSnapshot(round) {
+  return !round?.casual && round?.status === 'live' && round?.playingSnapshot?.schemaVersion
+    ? round.playingSnapshot
+    : null;
+}
+function historicalPlayerRecord(round, playerId) {
+  return immutableFinalSnapshot(round)?.players?.[playerId] || activePlayingSnapshot(round)?.players?.[playerId] || null;
+}
+function courseForRound(round, fallbackCourse) {
+  const snapCourse = immutableFinalSnapshot(round)?.course;
+  if (!snapCourse) return fallbackCourse;
+  return {
+    id: snapCourse.courseId,
+    name: snapCourse.courseName,
+    location: snapCourse.location || '',
+    defaultTee: snapCourse.defaultTee || snapCourse.teeName || '',
+    tees: Array.isArray(snapCourse.tees) ? snapCourse.tees : [],
+    holes: Array.isArray(snapCourse.holes) ? snapCourse.holes : [],
+  };
+}
+function seasonPlayersForRounds(players, rounds) {
+  const byId = new Map((players || []).map((player) => [player.id, player]));
+  (rounds || []).forEach((round) => {
+    const snapshot = immutableFinalSnapshot(round);
+    if (!snapshot) return;
+    Object.values(snapshot.players || {}).forEach((stored) => {
+      if (!byId.has(stored.playerId)) {
+        byId.set(stored.playerId, {
+          id: stored.playerId,
+          name: stored.playerName,
+          handicap: stored.handicapIndex,
+          team: stored.team,
+          historical: true,
+        });
+      }
+    });
+  });
+  return Array.from(byId.values());
+}
 function roundHoles(round, course) {
+  const snapshotHoles = immutableFinalSnapshot(round)?.course?.holes;
+  if (Array.isArray(snapshotHoles) && snapshotHoles.length) return snapshotHoles;
+  const playingHoles = activePlayingSnapshot(round)?.holes;
+  if (Array.isArray(playingHoles) && playingHoles.length) return playingHoles;
   return round.holes === 9 ? course.holes.slice(0, 9) : course.holes;
 }
 function scorecardEntryProgress(round, players, course) {
@@ -823,10 +882,25 @@ function getTee(course, teeName) {
 // default tee for anyone who hasn't picked one (and for every existing round,
 // which predates per-player tees).
 function playerTeeName(round, playerId) {
+  const stored = historicalPlayerRecord(round, playerId);
+  if (stored?.teeName) return stored.teeName;
   const pd = round.playerData && round.playerData[playerId];
   return (pd && pd.teeName) || round.teeName;
 }
 function playerTee(course, round, playerId) {
+  const stored = historicalPlayerRecord(round, playerId);
+  if (stored?.teeName && stored?.teeRating != null && stored?.teeSlope != null) {
+    return {
+      name: stored.teeName,
+      rating: stored.teeRating,
+      slope: stored.teeSlope,
+      yards: stored.teeYards ?? null,
+    };
+  }
+  const pd = round.playerData?.[playerId];
+  if (pd?.teeName && pd?.teeRating != null && pd?.teeSlope != null) {
+    return { name: pd.teeName, rating: pd.teeRating, slope: pd.teeSlope, yards: pd.teeYards ?? null };
+  }
   return getTee(course, playerTeeName(round, playerId));
 }
 // Course handicap already folds in (rating - par), which is exactly the
@@ -834,7 +908,11 @@ function playerTee(course, round, playerId) {
 // handicap lands on their quota no matter which tee they played — mixed-tee
 // groups need no extra correction.
 function playerQuotaInRound(settings, round, player, course) {
+  const stored = historicalPlayerRecord(round, player.id);
+  if (stored?.quota != null) return stored.quota;
   const pd = round.playerData[player.id];
+  if (pd?.quotaAtStart != null) return pd.quotaAtStart;
+  if (pd?.quota != null) return pd.quota;
   if (pd && pd.quotaOverride != null) return pd.quotaOverride;
   const tee = playerTee(course, round, player.id);
   const fullPar = courseParTotal(course, 18);
@@ -845,6 +923,22 @@ function playerQuotaInRound(settings, round, player, course) {
   return roundHalfDown(qBase9 - ch9);
 }
 function roundPlayerList(round, players) {
+  const finalSnapshot = immutableFinalSnapshot(round);
+  if (finalSnapshot) {
+    const orderedIds = Array.isArray(finalSnapshot.playerOrder)
+      ? finalSnapshot.playerOrder
+      : Object.keys(finalSnapshot.players || {});
+    return orderedIds
+      .map((id) => finalSnapshot.players?.[id])
+      .filter(Boolean)
+      .map((stored) => ({
+        id: stored.playerId,
+        name: stored.playerName,
+        handicap: stored.handicapIndex,
+        team: stored.team,
+        historical: true,
+      }));
+  }
   const guests = Array.isArray(round.guestPlayers) ? round.guestPlayers : [];
   const all = [...players, ...guests];
   if (Array.isArray(round.playerIds)) {
@@ -874,6 +968,11 @@ function formatRoundDate(iso) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 function courseHandicapFor(round, player, course) {
+  const stored = historicalPlayerRecord(round, player.id);
+  if (stored?.courseHandicap != null) return stored.courseHandicap;
+  const pd = round.playerData?.[player.id];
+  if (pd?.courseHandicapAtStart != null) return pd.courseHandicapAtStart;
+  if (pd?.courseHandicap != null) return pd.courseHandicap;
   const tee = playerTee(course, round, player.id);
   const fullPar = courseParTotal(course, 18);
   const ch18 = Math.round((player.handicap * tee.slope) / 113 + (tee.rating - fullPar));
@@ -950,11 +1049,14 @@ function casualScoreTotals(round, player, course) {
   };
 }
 function playerPointsInRound(settings, round, player, course) {
+  const stored = immutableFinalSnapshot(round)?.players?.[player.id];
+  if (stored) return stored.stablefordPoints ?? stored.totalPoints ?? null;
   if (Array.isArray(round.playerIds) && !round.playerIds.includes(player.id)) return null;
   const pd = round.playerData[player.id];
   if (!pd) return null;
   if (round.entryMode === 'points') return pd.points != null ? pd.points : null;
   const holes = roundHoles(round, course);
+  const scoringSettings = activePlayingSnapshot(round)?.settings || settings;
   const net = effectivePointsBasis(round) === 'net';
   const ranks = net ? localRanks(holes) : null;
   const ch = net ? Math.max(0, courseHandicapFor(round, player, course)) : 0;
@@ -964,13 +1066,21 @@ function playerPointsInRound(settings, round, player, course) {
     const s = pd.holeScores ? pd.holeScores[i] : null;
     if (s != null) {
       const eff = net ? s - strokesOnHole(ch, ranks[i], holes.length) : s;
-      total += stablefordPoints(eff, h.par, settings);
+      total += stablefordPoints(eff, h.par, scoringSettings);
       count++;
     }
   });
   return count > 0 ? total : null;
 }
 function playerResultInRound(settings, round, player, course) {
+  const stored = immutableFinalSnapshot(round)?.players?.[player.id];
+  if (stored) {
+    return {
+      points: stored.stablefordPoints ?? stored.totalPoints,
+      quota: stored.quota,
+      result: stored.resultVsQuota,
+    };
+  }
   const pts = playerPointsInRound(settings, round, player, course);
   if (pts == null) return null;
   const quota = playerQuotaInRound(settings, round, player, course);
@@ -994,6 +1104,8 @@ function getEvents(rounds) {
   return events;
 }
 function eventResultForPlayer(settings, event, rounds, courses, player) {
+  const stored = storedEventSnapshot(event, rounds)?.standingsResults?.[player.id];
+  if (stored) return { points: stored.points, quota: stored.quota, result: stored.result };
   let pts = 0,
     quota = 0,
     any = false;
@@ -1012,6 +1124,16 @@ function eventResultForPlayer(settings, event, rounds, courses, player) {
   return any ? { points: pts, quota, result: pts - quota } : null;
 }
 function computeEventRanking(settings, event, rounds, courses, players) {
+  const stored = storedEventSnapshot(event, rounds);
+  if (stored?.standingsResults) {
+    const ranked = Object.values(stored.standingsResults)
+      .sort((a, b) => a.finish - b.finish || b.result - a.result)
+      .map((row) => ({
+        id: row.id,
+        r: { points: row.points, quota: row.quota, result: row.result },
+      }));
+    return { ranked };
+  }
   const results = players
     .map((p) => ({ id: p.id, r: eventResultForPlayer(settings, event, rounds, courses, p) }))
     .filter((x) => x.r);
@@ -1020,28 +1142,43 @@ function computeEventRanking(settings, event, rounds, courses, players) {
 }
 function computeSeason(settings, rounds, courses, players) {
   const eligibleRounds = finalLeagueRounds(rounds, settings);
+  const seasonPlayers = seasonPlayersForRounds(players, eligibleRounds);
   const events = getEvents(eligibleRounds);
   const perPlayerRaw = {};
-  players.forEach((p) => {
+  seasonPlayers.forEach((p) => {
     perPlayerRaw[p.id] = [];
   });
   events.forEach((ev) => {
-    const { ranked } = computeEventRanking(settings, ev, eligibleRounds, courses, players);
+    const { ranked } = computeEventRanking(settings, ev, eligibleRounds, courses, seasonPlayers);
     ranked.forEach((x) => {
       perPlayerRaw[x.id].push(x.r.result);
     });
   });
   const rawTotals = {};
   const roundsPlayed = {};
-  players.forEach((p) => {
+  seasonPlayers.forEach((p) => {
     const sortedRaw = [...perPlayerRaw[p.id]].sort((a, b) => b - a).slice(0, settings.topScoresCounted);
     rawTotals[p.id] = sortedRaw.reduce((a, b) => a + b, 0);
     roundsPlayed[p.id] = perPlayerRaw[p.id].length;
   });
-  const anyResults = players.some((p) => perPlayerRaw[p.id].length > 0);
-  return { rawTotals, roundsPlayed, eventsCount: events.length, anyResults };
+  const anyResults = seasonPlayers.some((p) => perPlayerRaw[p.id].length > 0);
+  return { rawTotals, roundsPlayed, eventsCount: events.length, anyResults, players: seasonPlayers };
 }
 function computeSkinsForRound(round, allPlayers, course, settings) {
+  const snapshot = immutableFinalSnapshot(round);
+  if (snapshot?.skinsResults) {
+    const playerIds = snapshot.skinsResults.playerIds || [];
+    const storedPlayers = playerIds
+      .map((id) => snapshot.players?.[id])
+      .filter(Boolean)
+      .map((stored) => ({
+        id: stored.playerId,
+        name: stored.playerName,
+        handicap: stored.handicapIndex,
+        historical: true,
+      }));
+    return { ...snapshot.skinsResults, players: storedPlayers };
+  }
   if (round.entryMode !== 'holebyhole') return null;
   const optIn = (round.skinsOptIn || []).filter((id) => !Array.isArray(round.playerIds) || round.playerIds.includes(id));
   if (optIn.length < 2 || settings.skinsBuyIn <= 0) return null;
@@ -1099,6 +1236,20 @@ const TRASH_TYPES = [
   { id: 'custom', label: 'Custom', hint: 'Any extra dot agreed by the group' },
 ];
 function computeTrashForRound(round, allPlayers, course, settings) {
+  const snapshot = immutableFinalSnapshot(round);
+  if (snapshot?.trashResults) {
+    const playerIds = snapshot.trashResults.playerIds || [];
+    const storedPlayers = playerIds
+      .map((id) => snapshot.players?.[id])
+      .filter(Boolean)
+      .map((stored) => ({
+        id: stored.playerId,
+        name: stored.playerName,
+        handicap: stored.handicapIndex,
+        historical: true,
+      }));
+    return { ...snapshot.trashResults, players: storedPlayers };
+  }
   if (round.entryMode !== 'holebyhole') return null;
   const optIn = (round.trashOptIn || []).filter((id) => !Array.isArray(round.playerIds) || round.playerIds.includes(id));
   if (optIn.length === 0 || settings.trashValue <= 0) return null;
@@ -1132,7 +1283,7 @@ function computeTrashForRound(round, allPlayers, course, settings) {
 }
 // ---------- casual game scoring engines (built purely from raw per-hole gross scores) ----------
 function grossOf(round, playerId, holeIdx) {
-  return round.playerData[playerId]?.holeScores?.[holeIdx];
+  return immutableFinalSnapshot(round)?.players?.[playerId]?.holeScores?.[holeIdx] ?? round.playerData[playerId]?.holeScores?.[holeIdx];
 }
 function strokePlayBoard(round, course, players, net = false) {
   const holes = roundHoles(round, course);
@@ -1586,7 +1737,19 @@ function snakeBoard(round, players) {
 // Purse for a whole day. An event can span two combined nine-hole rounds, so
 // the pot must be based on who played the DAY, not summed per round — otherwise
 // a combined 18 would charge everyone two buy-ins.
+function storedEventSnapshot(event, rounds) {
+  const wanted = [...(event?.roundIds || [])].sort().join('|');
+  if (!wanted) return null;
+  for (const round of rounds || []) {
+    const stored = immutableFinalSnapshot(round)?.eventSnapshot;
+    if (!stored || stored.status !== 'complete') continue;
+    if ([...(stored.roundIds || [])].sort().join('|') === wanted) return stored;
+  }
+  return null;
+}
 function purseForEvent(settings, event, rounds, courses, players) {
+  const stored = storedEventSnapshot(event, rounds);
+  if (stored?.purseResults) return stored.purseResults;
   const ranked = players
     .map((p) => ({ id: p.id, r: eventResultForPlayer(settings, event, rounds, courses, p) }))
     .filter((x) => x.r)
@@ -1658,6 +1821,8 @@ function purseForEvent(settings, event, rounds, courses, players) {
 }
 
 function purseForRound(settings, round, players, course) {
+  const stored = immutableFinalSnapshot(round)?.purseResults;
+  if (stored) return stored;
   const scored = players.filter((p) => playerPointsInRound(settings, round, p, course) != null);
   const pot = settings.purseBuyIn * scored.length;
   const rake = scored.length > 0 ? settings.seasonRakePerRound : 0;
@@ -1671,6 +1836,344 @@ function purseForRound(settings, round, players, course) {
     payouts[r.id] = Math.round((payoutPool * pct) / 100);
   });
   return { pot, rake, payoutPool, ranked, payouts, scoredCount: scored.length };
+}
+
+function snapshotSettings(settings) {
+  return {
+    quotaBase: settings.quotaBase,
+    stablefordPoints: { ...(settings.stablefordPoints || {}) },
+    purseBuyIn: settings.purseBuyIn,
+    purseMode: settings.purseMode,
+    purseSplits: [...(settings.purseSplits || [])],
+    seasonRakePerRound: settings.seasonRakePerRound,
+    skinsBuyIn: settings.skinsBuyIn,
+    skinsType: settings.skinsType,
+    trashValue: settings.trashValue,
+    topScoresCounted: settings.topScoresCounted,
+  };
+}
+function serializeSkinsResult(result) {
+  if (!result) return null;
+  return {
+    pot: result.pot,
+    playerIds: result.players.map((player) => player.id),
+    tally: { ...result.tally },
+    payouts: { ...result.payouts },
+    totalSkins: result.totalSkins,
+    carry: result.carry,
+    thru: result.thru,
+  };
+}
+function serializeTrashResult(result) {
+  if (!result) return null;
+  return {
+    playerIds: result.players.map((player) => player.id),
+    tally: JSON.parse(JSON.stringify(result.tally || {})),
+    totalItems: result.totalItems,
+    value: result.value,
+    payouts: { ...result.payouts },
+  };
+}
+function snapshotPlacementMap(ranked) {
+  const placements = {};
+  let lastResult = null;
+  let lastPlace = 0;
+  ranked.forEach((row, index) => {
+    const place = index > 0 && row.result === lastResult ? lastPlace : index + 1;
+    placements[row.id] = place;
+    lastResult = row.result;
+    lastPlace = place;
+  });
+  return placements;
+}
+function buildPlayingSnapshot(settings, round, allPlayers, course, capturedAt = new Date().toISOString()) {
+  if (!round || round.casual) return null;
+  const calculationRound = { ...round, status: 'setup', playingSnapshot: null, finalSnapshot: null };
+  const participants = roundPlayerList(calculationRound, allPlayers);
+  const holes = roundHoles(calculationRound, course).map((hole) => ({ par: hole.par, si: hole.si }));
+  const groupTee = getTee(course, round.teeName);
+  const players = {};
+  participants.forEach((player) => {
+    const tee = playerTee(course, calculationRound, player.id);
+    players[player.id] = {
+      playerId: player.id,
+      playerName: player.name,
+      handicapIndex: Number(player.handicap) || 0,
+      team: player.team || null,
+      teeName: tee.name,
+      teeRating: tee.rating,
+      teeSlope: tee.slope,
+      teeYards: tee.yards ?? null,
+      courseHandicap: courseHandicapFor(calculationRound, player, course),
+      quota: playerQuotaInRound(settings, calculationRound, player, course),
+    };
+  });
+  return {
+    schemaVersion: PLAYING_SNAPSHOT_SCHEMA_VERSION,
+    capturedAt,
+    settings: snapshotSettings(settings),
+    courseId: course.id,
+    courseName: course.name,
+    courseLocation: course.location || '',
+    defaultTee: { name: groupTee.name, rating: groupTee.rating, slope: groupTee.slope, yards: groupTee.yards ?? null },
+    holes,
+    playerOrder: participants.map((player) => player.id),
+    players,
+  };
+}
+function buildFinalSnapshot(settings, round, allPlayers, course, options = {}) {
+  if (!round || round.casual) return null;
+  const now = options.finalizedAt || new Date().toISOString();
+  const previous = round.finalSnapshot?.schemaVersion ? round.finalSnapshot : null;
+  const calculationRound = { ...round, status: 'live', finalSnapshot: null };
+  const participants = roundPlayerList(calculationRound, allPlayers);
+  const knownParticipantIds = new Set(participants.map((player) => player.id));
+  const sourceIds = Array.isArray(round.playerIds) ? round.playerIds : Object.keys(round.playerData || {});
+  sourceIds.forEach((playerId) => {
+    if (knownParticipantIds.has(playerId)) return;
+    const pd = round.playerData?.[playerId] || {};
+    participants.push({
+      id: playerId,
+      name: pd.playerName || `Historical player ${playerId}`,
+      handicap: Number(pd.handicapIndex ?? pd.handicap) || 0,
+      team: pd.team || null,
+      historical: true,
+      snapshotPlaceholder: true,
+    });
+    knownParticipantIds.add(playerId);
+  });
+  const holes = Array.isArray(round.playingSnapshot?.holes) && round.playingSnapshot.holes.length
+    ? round.playingSnapshot.holes.map((hole) => ({ par: hole.par, si: hole.si }))
+    : roundHoles(calculationRound, course).map((hole) => ({ par: hole.par, si: hole.si }));
+  const settingsAtFinal = round.playingSnapshot?.settings || snapshotSettings(settings);
+  const calculated = participants
+    .map((player) => {
+      const tee = playerTee(course, calculationRound, player.id);
+      const pd = calculationRound.playerData?.[player.id] || {};
+      const holeScores = JSON.parse(JSON.stringify(pd.holeScores || {}));
+      const grossValues = Object.values(holeScores).filter((score) => score != null && Number.isFinite(Number(score))).map(Number);
+      const grossTotal = grossValues.length ? grossValues.reduce((sum, score) => sum + score, 0) : null;
+      const points = playerPointsInRound(settingsAtFinal, calculationRound, player, course);
+      const quota = playerQuotaInRound(settingsAtFinal, calculationRound, player, course);
+      const result = points == null ? null : points - quota;
+      const source = historicalPlayerRecord(calculationRound, player.id);
+      const storedHandicapIndex = source?.handicapIndex ?? pd.handicapIndexAtStart ?? pd.handicapIndex ?? pd.handicap;
+      const hasStoredHistoricalInput = storedHandicapIndex != null || pd.quotaAtStart != null || pd.quota != null || pd.quotaOverride != null || pd.courseHandicapAtStart != null || pd.courseHandicap != null;
+      return {
+        player,
+        stored: {
+          playerId: player.id,
+          playerName: source?.playerName || player.name,
+          handicapIndex: storedHandicapIndex ?? (Number(player.handicap) || 0),
+          handicapSource: source ? 'captured-when-live-scoring-began' : hasStoredHistoricalInput ? 'stored-round-values' : options.migration ? 'legacy-current-displayed-profile' : 'player-profile-at-finalization',
+          team: source?.team || player.team || null,
+          teeName: tee.name,
+          teeRating: tee.rating,
+          teeSlope: tee.slope,
+          teeYards: tee.yards ?? null,
+          courseHandicap: courseHandicapFor(calculationRound, player, course),
+          quota,
+          quotaOverride: pd.quotaOverride ?? null,
+          holeScores,
+          grossTotal,
+          stablefordPoints: points,
+          totalPoints: points,
+          resultVsQuota: result,
+          finish: null,
+          eventFinish: null,
+          seasonPointsAwarded: result,
+          pursePayout: 0,
+          skinsWon: 0,
+          trashTotal: 0,
+          money: { purseNet: 0, skinsNet: 0, trashNet: 0 },
+        },
+      };
+    });
+  const ranked = calculated
+    .filter((row) => row.stored.resultVsQuota != null)
+    .map((row) => ({
+      id: row.player.id,
+      result: row.stored.resultVsQuota,
+      points: row.stored.stablefordPoints,
+      quota: row.stored.quota,
+    }))
+    .sort((a, b) => b.result - a.result);
+  const placements = snapshotPlacementMap(ranked);
+  const skins = serializeSkinsResult(computeSkinsForRound(calculationRound, participants, course, settingsAtFinal));
+  const trash = serializeTrashResult(computeTrashForRound(calculationRound, participants, course, settingsAtFinal));
+  const purse = purseForRound(settingsAtFinal, calculationRound, participants, course);
+  const storedPlayers = {};
+  calculated.forEach(({ stored }) => {
+    stored.finish = placements[stored.playerId] || null;
+    stored.pursePayout = purse?.payouts?.[stored.playerId] || 0;
+    stored.money.purseNet = purse?.net?.[stored.playerId] ?? ((purse?.payouts?.[stored.playerId] || 0) - (purse?.scoredCount > 0 ? settingsAtFinal.purseBuyIn : 0));
+    stored.skinsWon = skins?.tally?.[stored.playerId] || 0;
+    stored.money.skinsNet = skins ? (skins.payouts?.[stored.playerId] || 0) - settingsAtFinal.skinsBuyIn : 0;
+    stored.trashTotal = trash?.tally?.[stored.playerId]?.total || 0;
+    if (trash && trash.playerIds.length > 1) {
+      stored.money.trashNet = trash.value * (stored.trashTotal * trash.playerIds.length - trash.totalItems);
+    }
+    storedPlayers[stored.playerId] = stored;
+  });
+  const assumptions = [];
+  if (options.migration) {
+    if (!round.finalizedAt) assumptions.push('Original finalization timestamp was unavailable; the migration timestamp was recorded.');
+    calculated.forEach(({ stored }) => {
+      if (stored.handicapSource === 'legacy-current-displayed-profile') {
+        assumptions.push(`${stored.playerName}: no historical handicap or quota was stored, so the result already displayed on this device was captured once and frozen.`);
+      }
+    });
+    participants.filter((player) => player.snapshotPlaceholder).forEach((player) => {
+      assumptions.push(`${player.name}: the league profile no longer existed, so available round data was preserved with a placeholder identity.`);
+    });
+  }
+  const defaultTeeUsed = round.playingSnapshot?.defaultTee || getTee(course, round.teeName);
+  return {
+    schemaVersion: FINAL_SNAPSHOT_SCHEMA_VERSION,
+    snapshotRevision: (previous?.snapshotRevision || 0) + 1,
+    finalizedAt: round.finalizedAt || now,
+    previousFinalizedAt: previous?.finalizedAt || null,
+    revisedAt: previous ? now : null,
+    migration: options.migration ? { migratedAt: now, assumptions } : null,
+    settings: settingsAtFinal,
+    source: {
+      roundId: round.id,
+      date: round.date,
+      holes: round.holes,
+      entryMode: round.entryMode,
+      pointsBasis: effectivePointsBasis(calculationRound),
+      combinedWith: round.combinedWith || null,
+      playerIds: participants.map((player) => player.id),
+      skinsOptIn: [...(round.skinsOptIn || [])],
+      trashOptIn: [...(round.trashOptIn || [])],
+    },
+    course: {
+      courseId: course.id,
+      courseName: round.playingSnapshot?.courseName || course.name,
+      location: round.playingSnapshot?.courseLocation || course.location || '',
+      teeName: defaultTeeUsed.name,
+      defaultTee: defaultTeeUsed.name,
+      rating: defaultTeeUsed.rating,
+      slope: defaultTeeUsed.slope,
+      par: holes.reduce((sum, hole) => sum + hole.par, 0),
+      holes,
+      tees: (course.tees || []).map((tee) => ({ name: tee.name, rating: tee.rating, slope: tee.slope, yards: tee.yards ?? null })),
+    },
+    playerOrder: participants.map((player) => player.id),
+    players: storedPlayers,
+    standingsResults: Object.fromEntries(ranked.map((row) => [row.id, { ...row, finish: placements[row.id] }])),
+    purseResults: purse ? JSON.parse(JSON.stringify(purse)) : null,
+    skinsResults: skins,
+    trashResults: trash,
+    eventSnapshot: previous?.eventSnapshot || null,
+  };
+}
+function buildEventSnapshot(settings, event, rounds, courses, players, previous = null, finalizedAt = new Date().toISOString()) {
+  const calculationRounds = rounds.map((round) =>
+    round.finalSnapshot
+      ? { ...round, finalSnapshot: { ...round.finalSnapshot, eventSnapshot: null } }
+      : round
+  );
+  const eventPlayers = seasonPlayersForRounds(players, calculationRounds);
+  const { ranked } = computeEventRanking(settings, event, calculationRounds, courses, eventPlayers);
+  const purse = purseForEvent(settings, event, calculationRounds, courses, eventPlayers);
+  const placementRows = ranked.map((row) => ({
+    id: row.id,
+    result: row.r.result,
+    points: row.r.points,
+    quota: row.r.quota,
+  }));
+  const placements = snapshotPlacementMap(placementRows);
+  return {
+    schemaVersion: FINAL_SNAPSHOT_SCHEMA_VERSION,
+    snapshotRevision: (previous?.snapshotRevision || 0) + 1,
+    status: 'complete',
+    finalizedAt,
+    previousFinalizedAt: previous?.finalizedAt || null,
+    roundIds: [...event.roundIds],
+    date: event.date,
+    standingsResults: Object.fromEntries(
+      placementRows.map((row) => [row.id, { ...row, finish: placements[row.id], seasonPointsAwarded: row.result }])
+    ),
+    purseResults: JSON.parse(JSON.stringify(purse)),
+    settings: snapshotSettings(settings),
+  };
+}
+function attachCompletedEventSnapshots(rounds, settings, players, courses, forceRoundId = null) {
+  let next = rounds;
+  const completedLeagueRounds = next.filter((round) => !round.casual && round.status === 'final' && round.finalSnapshot?.schemaVersion);
+  getEvents(completedLeagueRounds).forEach((event) => {
+    const eventRounds = event.roundIds.map((id) => next.find((round) => round.id === id)).filter(Boolean);
+    if (eventRounds.length !== event.roundIds.length || eventRounds.some((round) => round.status !== 'final' || !round.finalSnapshot?.schemaVersion)) return;
+    const waitingPartner = eventRounds.length === 1 && eventRounds[0].combinedWith
+      ? next.find((round) => round.id === eventRounds[0].combinedWith && round.status !== 'final')
+      : null;
+    if (waitingPartner) return;
+    const eventKey = [...event.roundIds].sort().join('|');
+    const existing = eventRounds
+      .map((round) => round.finalSnapshot.eventSnapshot)
+      .find((stored) => stored?.status === 'complete' && [...(stored.roundIds || [])].sort().join('|') === eventKey);
+    const forced = forceRoundId && event.roundIds.includes(forceRoundId);
+    if (existing && !forced && eventRounds.every((round) => round.finalSnapshot.eventSnapshot?.status === 'complete')) return;
+    const eventSnapshot = buildEventSnapshot(settings, event, next, courses, players, existing || null);
+    next = next.map((round) => {
+      if (!event.roundIds.includes(round.id)) return round;
+      const updatedPlayers = { ...round.finalSnapshot.players };
+      Object.keys(updatedPlayers).forEach((playerId) => {
+        const eventResult = eventSnapshot.standingsResults[playerId];
+        const stored = updatedPlayers[playerId];
+        updatedPlayers[playerId] = {
+          ...stored,
+          eventFinish: eventResult?.finish ?? null,
+          pursePayout: eventSnapshot.purseResults.payouts?.[playerId] || 0,
+          money: {
+            ...(stored.money || {}),
+            purseNet: eventSnapshot.purseResults.net?.[playerId] || 0,
+          },
+        };
+      });
+      return {
+        ...round,
+        finalSnapshot: {
+          ...round.finalSnapshot,
+          players: updatedPlayers,
+          purseResults: eventSnapshot.purseResults,
+          eventSnapshot,
+        },
+      };
+    });
+  });
+  return next;
+}
+function ensureFinalSnapshots(rounds, settings, players, courses) {
+  let changed = false;
+  let next = (rounds || []).map((round) => {
+    if (round.casual || round.status !== 'final' || round.finalSnapshot?.schemaVersion) return round;
+    const course = courses.find((candidate) => candidate.id === round.courseId) || courses[0];
+    if (!course) return round;
+    changed = true;
+    const finalizedAt = round.finalizedAt || new Date().toISOString();
+    return {
+      ...round,
+      finalizedAt,
+      finalSnapshot: buildFinalSnapshot(settings, { ...round, finalizedAt }, players, course, { migration: true, finalizedAt }),
+    };
+  });
+  const withEvents = attachCompletedEventSnapshots(next, settings, players, courses);
+  if (withEvents !== next) changed = true;
+  return { rounds: withEvents, changed };
+}
+function finalizeRoundCollection(rounds, roundId, settings, players, courses) {
+  const target = rounds.find((round) => round.id === roundId);
+  if (!target) return rounds;
+  if (target.casual) return rounds.map((round) => (round.id === roundId ? { ...round, status: 'final' } : round));
+  const course = courses.find((candidate) => candidate.id === target.courseId) || courses[0];
+  if (!course) return rounds;
+  const now = new Date().toISOString();
+  const finalized = { ...target, status: 'final', finalizedAt: target.finalizedAt || now, revisionPending: false };
+  finalized.finalSnapshot = buildFinalSnapshot(settings, finalized, players, course, { finalizedAt: now });
+  const next = rounds.map((round) => (round.id === roundId ? finalized : round));
+  return attachCompletedEventSnapshots(next, settings, players, courses, roundId);
 }
 
 // ---------- small UI primitives ----------
@@ -2738,10 +3241,11 @@ function HomeTab({ theme, settings, players, rounds, courses, availability, myPl
   const course = courses[0];
   const leagueRounds = finalLeagueRounds(rounds, settings);
   const season = computeSeason(settings, leagueRounds, courses, players);
+  const seasonPlayers = season.players;
   const liveRound = rounds.find((r) => r.status === 'live') || null;
   const liveCourse = liveRound ? courses.find((c) => c.id === liveRound.courseId) || course : null;
   const livePlayers = liveRound ? roundPlayerList(liveRound, players) : [];
-  const officialBoard = players
+  const officialBoard = season.players
     .filter((p) => (season.roundsPlayed[p.id] || 0) > 0)
     .sort((a, b) => (season.rawTotals[b.id] || 0) - (season.rawTotals[a.id] || 0));
   const top3 = officialBoard.slice(0, 3);
@@ -2754,10 +3258,10 @@ function HomeTab({ theme, settings, players, rounds, courses, availability, myPl
   const completedEvents = getEvents(completedLeagueRounds).sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
   const lastEvent = completedEvents[0] || null;
   const lastRound = lastEvent ? completedLeagueRounds.find((r) => lastEvent.roundIds.includes(r.id)) : null;
-  const lastCourse = lastRound ? courses.find((c) => c.id === lastRound.courseId) || course : null;
-  const lastPurse = lastEvent ? purseForEvent(settings, lastEvent, completedLeagueRounds, courses, players) : null;
+  const lastCourse = lastRound ? courseForRound(lastRound, courses.find((c) => c.id === lastRound.courseId) || course) : null;
+  const lastPurse = lastEvent ? purseForEvent(settings, lastEvent, completedLeagueRounds, courses, season.players) : null;
   const lastWinnerRow = lastPurse?.ranked?.[0] || null;
-  const lastWinner = lastWinnerRow ? players.find((p) => p.id === lastWinnerRow.id) : null;
+  const lastWinner = lastWinnerRow ? season.players.find((p) => p.id === lastWinnerRow.id) : null;
   const myLastResult = myPlayer && lastEvent ? eventResultForPlayer(settings, lastEvent, completedLeagueRounds, courses, myPlayer) : null;
   const myLastGross = myPlayer && lastEvent
     ? (() => {
@@ -2765,7 +3269,7 @@ function HomeTab({ theme, settings, players, rounds, courses, availability, myPl
         let hasScore = false;
         lastEvent.roundIds.forEach((roundId) => {
           const eventRound = completedLeagueRounds.find((r) => r.id === roundId);
-          const scores = eventRound?.playerData?.[myPlayer.id]?.holeScores || {};
+          const scores = immutableFinalSnapshot(eventRound)?.players?.[myPlayer.id]?.holeScores || eventRound?.playerData?.[myPlayer.id]?.holeScores || {};
           Object.values(scores).forEach((score) => {
             if (score == null || !Number.isFinite(Number(score))) return;
             total += Number(score);
@@ -3028,37 +3532,37 @@ function StandingsTab({ settings, players, setPlayers, rounds, courses, availabi
   // Days, newest first. Each event is one dogfight — a single 18 or two
   // combined nines played the same day.
   const events = getEvents(leagueRounds)
-    .map((ev) => ({ ...ev, purse: purseForEvent(settings, ev, leagueRounds, courses, players) }))
+    .map((ev) => ({ ...ev, purse: purseForEvent(settings, ev, leagueRounds, courses, seasonPlayers) }))
     .filter((ev) => ev.purse.scoredCount > 0)
     .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
   const activeEvent = events[Math.min(eventIdx, Math.max(0, events.length - 1))] || null;
 
   // Money won per player across every day, net of the buy-in they paid in.
   const moneyByPlayer = {};
-  players.forEach((p) => (moneyByPlayer[p.id] = 0));
+  seasonPlayers.forEach((p) => (moneyByPlayer[p.id] = 0));
   events.forEach((ev) => {
     Object.entries(ev.purse.net).forEach(([pid, amt]) => (moneyByPlayer[pid] = (moneyByPlayer[pid] || 0) + amt));
   });
 
-  const seasonPool = settings.seasonBuyIn * players.length + events.length * settings.seasonRakePerRound;
+  const seasonPool = settings.seasonBuyIn * players.length + events.reduce((sum, event) => sum + (event.purse.rake || 0), 0);
 
   // Season order is driven by quota points — total strokes over/under quota —
   // rather than finish-position points, since that's what the league cares about.
-  const leaderboard = [...players]
+  const leaderboard = [...seasonPlayers]
     .filter((p) => (season.roundsPlayed[p.id] || 0) > 0)
     .sort((a, b) => (season.rawTotals[b.id] || 0) - (season.rawTotals[a.id] || 0));
 
   function updatePlayerFromStandings(id, patch) {
     setPlayers((ps) => ps.map((p) => (p.id === id ? { ...p, ...patch } : p)));
   }
-  const dashPlayer = dashPlayerId ? players.find((p) => p.id === dashPlayerId) : null;
+  const dashPlayer = dashPlayerId ? seasonPlayers.find((p) => p.id === dashPlayerId) : null;
 
   const skinsByPlayer = {};
-  players.forEach((p) => (skinsByPlayer[p.id] = 0));
+  seasonPlayers.forEach((p) => (skinsByPlayer[p.id] = 0));
   leagueRounds.forEach((r) => {
-    const course = courses.find((c) => c.id === r.courseId);
+    const course = courseForRound(r, courses.find((c) => c.id === r.courseId));
     if (!course) return;
-    const skins = computeSkinsForRound(r, players, course, settings);
+    const skins = computeSkinsForRound(r, seasonPlayers, course, settings);
     if (skins) Object.entries(skins.tally).forEach(([pid, count]) => (skinsByPlayer[pid] = (skinsByPlayer[pid] || 0) + count));
   });
 
@@ -3112,7 +3616,7 @@ Respond with ONLY this JSON, no other text: [{"title": "Award Name", "player": "
       <PlayerDashboard
         settings={settings}
         player={dashPlayer}
-        players={players}
+        players={seasonPlayers}
         rounds={rounds || []}
         courses={courses || []}
         availability={availability}
@@ -3171,10 +3675,10 @@ Respond with ONLY this JSON, no other text: [{"title": "Award Name", "player": "
           {activeEvent && (() => {
             const purse = activeEvent.purse;
             const winner = purse.ranked[0];
-            const winnerPlayer = winner ? players.find((p) => p.id === winner.id) : null;
+              const winnerPlayer = winner ? seasonPlayers.find((p) => p.id === winner.id) : null;
             const tiedAtTop = purse.ranked.filter((x) => winner && x.result === winner.result);
             const evRound = leagueRounds.find((r) => r.id === activeEvent.roundIds[0]);
-            const evCourse = evRound ? courses.find((c) => c.id === evRound.courseId) : null;
+              const evCourse = evRound ? courseForRound(evRound, courses.find((c) => c.id === evRound.courseId)) : null;
             return (
               <>
                 <Card primary>
@@ -3199,7 +3703,7 @@ Respond with ONLY this JSON, no other text: [{"title": "Award Name", "player": "
                       </div>
                       <div className="font-display text-2xl" style={{ color: C.gold, textShadow: C.goldGlow }}>
                         {tiedAtTop.length > 1
-                          ? tiedAtTop.map((x) => (players.find((p) => p.id === x.id) || {}).name).join(' & ')
+                          ? tiedAtTop.map((x) => (seasonPlayers.find((p) => p.id === x.id) || {}).name).join(' & ')
                           : winnerPlayer.name}
                       </div>
                       <div className="text-xs" style={{ color: C.muted }}>
@@ -3230,7 +3734,7 @@ Respond with ONLY this JSON, no other text: [{"title": "Award Name", "player": "
                     <div className="text-right">+/−</div>
                   </div>
                   {purse.ranked.map((x, i) => {
-                    const p = players.find((pp) => pp.id === x.id);
+                    const p = seasonPlayers.find((pp) => pp.id === x.id);
                     if (!p) return null;
                     const money = purse.payouts[x.id] || 0;
                     const dayNet = purse.net[x.id] || 0;
@@ -3414,10 +3918,12 @@ Respond with ONLY this JSON, no other text: [{"title": "Award Name", "player": "
 
 // ---------- Skins tab ----------
 function SkinsTab({ settings, players, rounds, courses }) {
-  const skinsRounds = finalLeagueRounds(rounds, settings)
-    .map((r) => ({ round: r, course: courses.find((c) => c.id === r.courseId) }))
+  const finalizedRounds = finalLeagueRounds(rounds, settings);
+  const historicalPlayers = seasonPlayersForRounds(players, finalizedRounds);
+  const skinsRounds = finalizedRounds
+    .map((r) => ({ round: r, course: courseForRound(r, courses.find((c) => c.id === r.courseId)) }))
     .filter((x) => x.course)
-    .map((x) => ({ ...x, skins: computeSkinsForRound(x.round, players, x.course, settings) }))
+    .map((x) => ({ ...x, skins: computeSkinsForRound(x.round, historicalPlayers, x.course, settings) }))
     .filter((x) => x.skins);
 
   return (
@@ -4534,10 +5040,11 @@ function playerSeasonMoney(settings, rounds, courses, allPlayers, player) {
   sorted.forEach((r) => {
     if (r.casual || r.status !== 'final') return;
     if (settings.seasonStart && r.date && r.date < settings.seasonStart) return;
-    if (!(r.playerIds || []).includes(player.id)) return;
-    const course = courses.find((c) => c.id === r.courseId);
+    const storedPlayer = immutableFinalSnapshot(r)?.players?.[player.id];
+    if (!storedPlayer && !(r.playerIds || []).includes(player.id)) return;
+    const course = courseForRound(r, courses.find((c) => c.id === r.courseId));
     if (!course) return;
-    const roundPlayers = allPlayers.filter((p) => (r.playerIds || []).includes(p.id));
+    const roundPlayers = roundPlayerList(r, allPlayers);
     let rPurse = 0;
     let rSkins = 0;
     let rTrash = 0;
@@ -4552,7 +5059,7 @@ function playerSeasonMoney(settings, rounds, courses, allPlayers, player) {
         const ev = { id: r.id, date: r.date, roundIds: evRounds.map((x) => x.id) };
         const evPlayerIds = new Set();
         evRounds.forEach((x) => (x.playerIds || []).forEach((id) => evPlayerIds.add(id)));
-        const evPlayers = allPlayers.filter((p) => evPlayerIds.has(p.id));
+        const evPlayers = seasonPlayersForRounds(allPlayers, evRounds).filter((p) => evPlayerIds.has(p.id) || evRounds.some((eventRound) => immutableFinalSnapshot(eventRound)?.players?.[p.id]));
         const purse = purseForEvent(settings, ev, sorted, courses, evPlayers);
         if (purse && purse.scoredCount > 0) {
           rPurse = purse.net[player.id] != null ? purse.net[player.id] : 0;
@@ -4560,12 +5067,16 @@ function playerSeasonMoney(settings, rounds, courses, allPlayers, player) {
       }
     }
 
-    if ((r.skinsOptIn || []).includes(player.id)) {
+    if (storedPlayer) {
+      rSkins = storedPlayer.money?.skinsNet || 0;
+    } else if ((r.skinsOptIn || []).includes(player.id)) {
       const skins = computeSkinsForRound(r, roundPlayers, course, settings);
       if (skins) rSkins = (skins.payouts[player.id] || 0) - settings.skinsBuyIn;
     }
 
-    if ((r.trashOptIn || []).includes(player.id)) {
+    if (storedPlayer) {
+      rTrash = storedPlayer.money?.trashNet || 0;
+    } else if ((r.trashOptIn || []).includes(player.id)) {
       const trash = computeTrashForRound(r, roundPlayers, course, settings);
       if (trash && trash.players.length > 1) {
         const n = trash.players.length;
@@ -4590,10 +5101,10 @@ function playerScoreDistribution(rounds, playerId, courses) {
   const counts = { eagle: 0, birdie: 0, par: 0, bogey: 0, double: 0 };
   let holesPlayed = 0;
   rounds.forEach((r) => {
-    const course = courses.find((c) => c.id === r.courseId);
+    const course = courseForRound(r, courses.find((c) => c.id === r.courseId));
     if (!course) return;
     roundHoles(r, course).forEach((h, i) => {
-      const g = r.playerData?.[playerId]?.holeScores?.[i];
+      const g = immutableFinalSnapshot(r)?.players?.[playerId]?.holeScores?.[i] ?? r.playerData?.[playerId]?.holeScores?.[i];
       if (g == null) return;
       holesPlayed++;
       const d = g - h.par;
@@ -4706,7 +5217,7 @@ function PlayerDashboard({
   const leagueRounds = finalLeagueRounds(rounds, settings);
   const season = computeSeason(settings, leagueRounds, courses, players);
 
-  const board = players
+  const board = season.players
     .filter((p) => (season.roundsPlayed[p.id] || 0) > 0)
     .sort((a, b) => (season.rawTotals[b.id] || 0) - (season.rawTotals[a.id] || 0));
   const rank = board.findIndex((p) => p.id === player.id) + 1;
@@ -4721,7 +5232,7 @@ function PlayerDashboard({
     .sort((a, b) => (a.ev.date < b.ev.date ? -1 : 1))
     .map((x) => ({ value: x.result.result, date: x.ev.date }));
 
-  const allScored = leagueRounds.filter((r) => r.playerData?.[player.id]);
+  const allScored = leagueRounds.filter((r) => immutableFinalSnapshot(r)?.players?.[player.id] || r.playerData?.[player.id]);
   const { counts, holesPlayed } = playerScoreDistribution(allScored, player.id, courses);
   const money = playerSeasonMoney(settings, rounds, courses, players, player);
 
@@ -5450,7 +5961,7 @@ function GameScoreboardCard({ settings, round, course, players, patchGameData, r
     const board = activePlayers
       .map((p) => {
         const res = playerResultInRound(settings, round, p, course);
-        const thru = holes.filter((h, i) => round.playerData[p.id]?.holeScores?.[i] != null).length;
+        const thru = holes.filter((h, i) => grossOf(round, p.id, i) != null).length;
         return { p, res, thru };
       })
       .sort((a, b) => (b.res ? b.res.result : -999) - (a.res ? a.res.result : -999));
@@ -6787,7 +7298,7 @@ function HoleByHoleRecap({ round, course, players }) {
             )
           )}
           {players.map((p) => {
-            const scores = holes.map((h, i) => round.playerData[p.id]?.holeScores?.[i]);
+            const scores = holes.map((h, i) => grossOf(round, p.id, i));
             return (
               <React.Fragment key={p.id}>
                 <div style={{ position: 'sticky', left: 0, background: C.surface, zIndex: 1 }} className="text-[11px] py-1 truncate pr-1 flex items-center gap-1" title={`${p.name} · ${playerTeeName(round, p.id)} tees`}>
@@ -6809,7 +7320,7 @@ function HoleByHoleRecap({ round, course, players }) {
                     );
                   }
                   const h = holes[c.idx];
-                  const g = round.playerData[p.id]?.holeScores?.[c.idx];
+                  const g = grossOf(round, p.id, c.idx);
                   return (
                     <div key={ci} className="flex items-center justify-center" style={{ height: 30 }}>
                       <ScoreMark strokes={g} par={h.par} size={19} fontSize={11} />
@@ -7156,6 +7667,7 @@ function casualMoneyForRound(settings, round, course, players) {
 }
 
 function RoundSummary({ round, course, players, courses, rounds, settings, onDone, onReopen }) {
+  const [confirmReopen, setConfirmReopen] = useState(false);
   const activePlayers = roundPlayerList(round, players);
   const game = GAME_LIBRARY.find((g) => g.id === round.gameId) || null;
   const holes = roundHoles(round, course);
@@ -7173,7 +7685,14 @@ function RoundSummary({ round, course, players, courses, rounds, settings, onDon
 
   const casualOutcome = round.casual ? casualRoundOutcome(settings, round, course, activePlayers) : null;
   const casualMoney = round.casual ? casualMoneyForRound(settings, round, course, activePlayers) : null;
-  const purse = !round.casual ? purseForRound(settings, round, activePlayers, course) : null;
+  const summaryLeagueRounds = !round.casual ? finalLeagueRounds(rounds, settings) : [];
+  const summaryEvent = !round.casual ? getEvents(summaryLeagueRounds).find((event) => event.roundIds.includes(round.id)) : null;
+  const summaryPlayers = !round.casual ? seasonPlayersForRounds(players, summaryLeagueRounds) : players;
+  const purse = !round.casual
+    ? summaryEvent
+      ? purseForEvent(settings, summaryEvent, summaryLeagueRounds, courses, summaryPlayers)
+      : purseForRound(settings, round, activePlayers, course)
+    : null;
   const skinsRound = !round.casual && round.entryMode === 'holebyhole' ? { ...round } : null;
   const skins = skinsRound ? computeSkinsForRound(skinsRound, activePlayers, course, settings) : null;
   const trash = !round.casual && round.entryMode === 'holebyhole' ? computeTrashForRound(round, activePlayers, course, settings) : null;
@@ -7185,13 +7704,12 @@ function RoundSummary({ round, course, players, courses, rounds, settings, onDon
 
   let impact = null;
   if (!round.casual) {
-    const leagueRounds = finalLeagueRounds(rounds, settings);
-    const events = getEvents(leagueRounds);
-    const event = events.find((e) => e.roundIds.includes(round.id));
+    const leagueRounds = summaryLeagueRounds;
+    const event = summaryEvent;
     if (event) {
-      const { ranked } = computeEventRanking(settings, event, leagueRounds, courses, players);
-      const season = computeSeason(settings, leagueRounds, courses, players);
-      const leaderboard = [...players]
+      const { ranked } = computeEventRanking(settings, event, leagueRounds, courses, summaryPlayers);
+      const season = computeSeason(settings, leagueRounds, courses, summaryPlayers);
+      const leaderboard = [...season.players]
         .filter((p) => (season.roundsPlayed[p.id] || 0) > 0)
         .sort((a, b) => (season.rawTotals[b.id] || 0) - (season.rawTotals[a.id] || 0));
       impact = { ranked, season, leaderboard };
@@ -7338,7 +7856,7 @@ function RoundSummary({ round, course, players, courses, rounds, settings, onDon
                 Weekly purse — pot ${purse.pot} (${purse.rake} to season pool)
               </div>
               {purse.ranked.map((r, i) => {
-                const p = players.find((pp) => pp.id === r.id);
+                const p = summaryPlayers.find((pp) => pp.id === r.id);
                 const pay = purse.payouts[r.id] || 0;
                 return <BoardRow key={r.id} rank={i + 1} name={p?.name || '?'} value={pay > 0 ? `$${pay}` : '—'} sub={`${r.result >= 0 ? '+' : ''}${r.result}`} />;
               })}
@@ -7438,9 +7956,20 @@ function RoundSummary({ round, course, players, courses, rounds, settings, onDon
       <PrimaryButton onClick={onDone} style={{ width: '100%', textAlign: 'center', marginBottom: 8 }}>
         Done
       </PrimaryButton>
-      <GhostButton onClick={onReopen} style={{ width: '100%', textAlign: 'center', marginBottom: 24 }}>
-        Reopen this round
+      <GhostButton onClick={() => round.casual ? onReopen() : setConfirmReopen(true)} style={{ width: '100%', textAlign: 'center', marginBottom: 24 }}>
+        {round.casual ? 'Reopen this round' : 'Edit Finalized Round'}
       </GhostButton>
+      {confirmReopen && (
+        <ConfirmDialog
+          title="Edit this finalized round?"
+          message="This round is locked as a historical snapshot. Reopening it allows scores, tees, and results to change. The current snapshot stays preserved until you intentionally finish the round again, which creates a new revision."
+          onCancel={() => setConfirmReopen(false)}
+          onConfirm={() => {
+            setConfirmReopen(false);
+            onReopen();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -7501,6 +8030,33 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
   }
   function patchRound(id, patch) {
     setRounds((rs) => rs.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  }
+  function beginLiveRound(id, patch = {}) {
+    setRounds((currentRounds) =>
+      currentRounds.map((round) => {
+        if (round.id !== id) return round;
+        const prepared = {
+          ...round,
+          ...patch,
+          status: 'live',
+          entryMode: 'holebyhole',
+          currentHole: patch.currentHole ?? round.currentHole ?? 0,
+          startedAt: round.startedAt || new Date().toISOString(),
+        };
+        if (prepared.casual) return prepared;
+        const course = courses.find((candidate) => candidate.id === prepared.courseId) || courses[0];
+        return {
+          ...prepared,
+          playingSnapshot: course ? buildPlayingSnapshot(settings, prepared, players, course) : prepared.playingSnapshot,
+        };
+      })
+    );
+  }
+  function finalizeRound(id, patch = {}) {
+    setRounds((currentRounds) => {
+      const prepared = currentRounds.map((round) => (round.id === id ? { ...round, ...patch } : round));
+      return finalizeRoundCollection(prepared, id, settings, players, courses);
+    });
   }
   function togglePlayerInRound(roundId, playerId) {
     setRounds((rs) =>
@@ -7674,7 +8230,7 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
     .filter((r) => !!r.casual === editingIsCasual && r.id !== editingRoundId)
     .slice(0, 6)
     .map((r) => {
-      const roundCourse = courses.find((c) => c.id === r.courseId);
+      const roundCourse = courseForRound(r, courses.find((c) => c.id === r.courseId));
       return {
         label: editingIsCasual ? roundGameLabel(r) : settings.leagueName,
         detail: `${formatRoundDate(r.date)} · ${roundCourse?.name || 'Course'}`,
@@ -7705,9 +8261,7 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
         toggleTrashItem={toggleTrashItem}
         patchGameData={patchGameData}
         onBackToSetup={() => patchRound(editing.id, { status: 'setup' })}
-        onFinish={() => {
-          patchRound(editing.id, { status: 'final' });
-        }}
+        onFinish={() => finalizeRound(editing.id)}
         cloudStatus={cloudStatus}
         saveStatus={saveStatus}
       />
@@ -7715,7 +8269,8 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
   }
 
   if (editing && editing.status === 'final') {
-    const course = courses.find((c) => c.id === editing.courseId) || courses[0];
+    const currentCourse = courses.find((c) => c.id === editing.courseId) || courses[0];
+    const course = courseForRound(editing, currentCourse);
     return (
       <InteractiveEdgeBack onBack={backFromEditing} underlay={roundUnderlay}>
       <RoundSummary
@@ -7729,7 +8284,13 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
           setEditingRoundId(null);
           onGoHome();
         }}
-        onReopen={() => patchRound(editing.id, { status: editing.logged ? 'setup' : 'live' })}
+        onReopen={() =>
+          patchRound(editing.id, {
+            status: editing.logged ? 'setup' : 'live',
+            reopenedAt: new Date().toISOString(),
+            revisionPending: !editing.casual,
+          })
+        }
       />
       </InteractiveEdgeBack>
     );
@@ -8573,8 +9134,7 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
           <>
             <PrimaryButton
               onClick={() => {
-                patchRound(editing.id, {
-                  status: 'final',
+                finalizeRound(editing.id, {
                   entryMode: 'holebyhole',
                   startedAt: editing.startedAt || new Date().toISOString(),
                 });
@@ -8599,11 +9159,8 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
         ) : editing.casual ? (
           <PrimaryButton
             onClick={() => {
-              patchRound(editing.id, {
-                status: 'live',
-                entryMode: 'holebyhole',
+              beginLiveRound(editing.id, {
                 currentHole: editing.currentHole || 0,
-                startedAt: editing.startedAt || new Date().toISOString(),
               });
             }}
             disabled={activePlayers.length === 0 || !teesConfirmed || !teamSetupValid}
@@ -8626,11 +9183,8 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
           >
             <PrimaryButton
               onClick={() => {
-                patchRound(editing.id, {
-                  status: 'live',
-                  entryMode: 'holebyhole',
+                beginLiveRound(editing.id, {
                   currentHole: editing.currentHole || 0,
-                  startedAt: editing.startedAt || new Date().toISOString(),
                 });
               }}
               disabled={activePlayers.length === 0 || !teesConfirmed || !teamSetupValid}
@@ -8677,7 +9231,7 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
   }
 
   function renderRoundRow(r, idx) {
-    const course = courses.find((c) => c.id === r.courseId);
+    const course = courseForRound(r, courses.find((c) => c.id === r.courseId));
     const roundPlayers = roundPlayerList(r, players);
     const scored = course ? roundPlayers.filter((p) => playerPointsInRound(settings, r, p, course) != null).length : 0;
     const selected = selectedRoundIds.includes(r.id);
@@ -9262,7 +9816,13 @@ function SettingsTab({ settings, setSettings, players, setPlayers, courses, roun
     // Remap references first, then drop the extra player records. The existing
     // upward-sync pass notices the ids that vanished from state and deletes the
     // matching Firestore documents, so the cloud roster gets cleaned up too.
-    setRounds((rs) => remapPlayerIds(rs, plan.idMap));
+    setRounds((rs) =>
+      rs.map((round) => {
+        const finalSnapshot = round.finalSnapshot;
+        const remapped = remapPlayerIds({ ...round, finalSnapshot: undefined }, plan.idMap);
+        return finalSnapshot ? { ...remapped, finalSnapshot } : remapped;
+      })
+    );
     setAvailability((av) => remapPlayerIds(av, plan.idMap));
     setPlayers((ps) => ps.filter((p) => !removed.has(p.id)));
   }
@@ -9984,6 +10544,17 @@ function DogfightLeague() {
     })();
   }, []);
 
+  // One-time, backward-compatible migration. Existing finalized league rounds
+  // are frozen exactly once, persisted through the normal local/cloud save
+  // path, and never rebuilt after a later handicap refresh.
+  useEffect(() => {
+    if (loading) return;
+    setRounds((currentRounds) => {
+      const migrated = ensureFinalSnapshots(currentRounds, settings, players, courses);
+      return migrated.changed ? migrated.rounds : currentRounds;
+    });
+  }, [loading, rounds, settings, players, courses]);
+
   // connect to Firebase once local data has loaded; no-op and harmless if the SDK isn't loaded
   useEffect(() => {
     if (loading) return; // wait for local storage to load first so we don't race the cloud listener
@@ -10255,7 +10826,14 @@ function DogfightLeague() {
               // could wipe everyone's card. Merging writes only the keys this
               // device actually knows about and leaves the rest of
               // playerData/trash/gameData untouched in the cloud.
-              batch.set(base.collection('rounds').doc(r.id), r, { merge: true });
+              // A finalized snapshot is one immutable top-level value. Using
+              // mergeFields replaces that value atomically instead of
+              // recursively retaining stale players from an older revision.
+              batch.set(
+                base.collection('rounds').doc(r.id),
+                r,
+                r.finalSnapshot?.schemaVersion ? { mergeFields: Object.keys(r) } : { merge: true }
+              );
               lastSyncedRef.current.rounds[r.id] = j;
               knownCloudRoundIdsRef.current.add(r.id);
               dirty = true;
