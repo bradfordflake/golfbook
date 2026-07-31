@@ -401,6 +401,43 @@ function reconcileFromCloud(localList, incomingList, prevSyncedMap, knownCloudId
   return out;
 }
 
+// Merge an availability snapshot without throwing away changes made on this
+// device while its debounced cloud write is still pending. Availability is
+// stored as one document per date and one field per player, so each player's
+// AM/PM choice can be reconciled independently.
+function reconcileAvailabilityFromCloud(local, incoming, prevSyncedMap) {
+  const out = { ...incoming };
+  Object.keys(local).forEach((dateKey) => {
+    const lastJSON = prevSyncedMap[dateKey];
+    if (lastJSON === undefined) {
+      // Two devices can create the same date before either has received a
+      // baseline. Union their player choices instead of letting the first
+      // cloud snapshot replace the other device's still-pending selection.
+      out[dateKey] = { ...(incoming[dateKey] || {}), ...local[dateKey] };
+      return;
+    }
+    let base = {};
+    try { base = JSON.parse(lastJSON) || {}; } catch (e) {}
+    const localDay = local[dateKey] || {};
+    const incomingDay = incoming[dateKey] || {};
+    const mergedDay = { ...incomingDay };
+    const playerIds = new Set([...Object.keys(base), ...Object.keys(localDay), ...Object.keys(incomingDay)]);
+    playerIds.forEach((playerId) => {
+      const baseChoice = { am: false, pm: false, ...(base[playerId] || {}) };
+      const localChoice = { am: false, pm: false, ...(localDay[playerId] || {}) };
+      const mergedChoice = { am: false, pm: false, ...(incomingDay[playerId] || {}) };
+      ['am', 'pm'].forEach((session) => {
+        if (localChoice[session] !== baseChoice[session]) mergedChoice[session] = localChoice[session];
+      });
+      if (mergedChoice.am || mergedChoice.pm) mergedDay[playerId] = mergedChoice;
+      else delete mergedDay[playerId];
+    });
+    if (Object.keys(mergedDay).length) out[dateKey] = mergedDay;
+    else delete out[dateKey];
+  });
+  return out;
+}
+
 const STORAGE_KEY = 'dogfight-league';
 const MY_PLAYER_KEY = 'dfl:my-player-id'; // local to this device, never synced league-wide
 const APP_VERSION = '2026.07.31-concurrency-hardening+cdn-fallback';
@@ -3821,20 +3858,33 @@ function HomeTab({ theme, settings, players, rounds, courses, availability, myPl
         </Card>
       )}
 
-      {myPlayer && (
-        <button onClick={() => onGoTab('calendar')} className="w-full text-left tap" style={{ display: 'block' }}>
+      {lastEvent && lastPurse && (
+        <button onClick={() => onGoTab('rounds')} className="w-full text-left tap" style={{ display: 'block' }}>
           <Card style={homeCardStyle}>
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
-                <div className="font-display text-base" style={{ color: C.lime }}>Next Golf</div>
-                <div className="font-display text-xl mt-1 truncate" style={{ color: C.text }}>
-                  {myNextGolf ? `${formatRoundDate(myNextGolf.date)} · ${myNextGolf.sessions.map((session) => session.label).join(' / ')}` : 'Mark your availability'}
-                </div>
-                <div className="text-sm mt-0.5" style={{ color: C.muted }}>
-                  {myNextGolf ? `${myNextGolf.bestCount} player${myNextGolf.bestCount === 1 ? '' : 's'} available` : 'Open the calendar to choose a date'}
-                </div>
+                <div className="font-display text-base" style={{ color: C.lime }}>Your Last Dogfight</div>
+                <div className="font-display text-xl mt-1 truncate" style={{ color: C.text }}>{myLastResult && myPlayer ? myPlayer.name : formatRoundDate(lastEvent.date)}</div>
+                {myLastResult && myPlayer ? (
+                  <>
+                    <div className="text-xs mt-0.5" style={{ color: C.muted }}>{formatRoundDate(lastEvent.date)}</div>
+                    <div className="text-sm mt-1 truncate" style={{ color: myLastResult.result >= 0 ? C.lime : C.red }}>
+                      {signed(myLastResult.result)} vs quota · {myLastPlaceIndex >= 0 ? ordinal(myLastPlaceIndex + 1) : '—'} place
+                      {myLastNet != null && <span style={{ color: myLastNet > 0 ? C.lime : myLastNet < 0 ? C.red : 'inherit' }}> · {moneySigned(myLastNet)}</span>}
+                    </div>
+                    {lastWinner && (
+                      <div className="text-sm mt-0.5 truncate" style={{ color: C.muted }}>Winner: {lastWinner.name} · {signed(lastWinnerRow.result)}</div>
+                    )}
+                  </>
+                ) : (
+                  <div className="text-sm mt-1 truncate" style={{ color: C.muted }}>
+                    {lastWinner ? `Winner: ${lastWinner.name} · ${signed(lastWinnerRow.result)}` : lastCourse?.name || 'Completed round'}
+                  </div>
+                )}
               </div>
-              <span className="font-display text-3xl shrink-0" style={{ color: C.lime }}>›</span>
+              <span className="w-12 h-12 rounded-full flex items-center justify-center shrink-0" style={{ background: C.limeSoft, color: C.lime }}>
+                <TrophyIcon size={26} />
+              </span>
             </div>
           </Card>
         </button>
@@ -3866,32 +3916,20 @@ function HomeTab({ theme, settings, players, rounds, courses, availability, myPl
         </Card>
       </button>
 
-      {lastEvent && lastPurse && (
-        <button onClick={() => onGoTab('rounds')} className="w-full text-left tap" style={{ display: 'block' }}>
+      {myPlayer && (
+        <button onClick={() => onGoTab('calendar')} className="w-full text-left tap" style={{ display: 'block' }}>
           <Card style={homeCardStyle}>
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
-                <div className="font-display text-base" style={{ color: C.lime }}>Your Last Dogfight</div>
-                <div className="font-display text-xl mt-1 truncate" style={{ color: C.text }}>{myLastResult && myPlayer ? myPlayer.name : formatRoundDate(lastEvent.date)}</div>
-                {myLastResult && myPlayer ? (
-                  <>
-                    <div className="text-sm mt-1 truncate" style={{ color: myLastResult.result >= 0 ? C.lime : C.red }}>
-                      {signed(myLastResult.result)} vs quota · {myLastPlaceIndex >= 0 ? ordinal(myLastPlaceIndex + 1) : '—'} place
-                      {myLastNet != null && <span style={{ color: myLastNet > 0 ? C.lime : myLastNet < 0 ? C.red : 'inherit' }}> · {moneySigned(myLastNet)}</span>}
-                    </div>
-                    {lastWinner && (
-                      <div className="text-sm mt-0.5 truncate" style={{ color: C.muted }}>Winner: {lastWinner.name} · {signed(lastWinnerRow.result)}</div>
-                    )}
-                  </>
-                ) : (
-                  <div className="text-sm mt-1 truncate" style={{ color: C.muted }}>
-                    {lastWinner ? `Winner: ${lastWinner.name} · ${signed(lastWinnerRow.result)}` : lastCourse?.name || 'Completed round'}
-                  </div>
-                )}
+                <div className="font-display text-base" style={{ color: C.lime }}>Next Tee Time</div>
+                <div className="font-display text-xl mt-1 truncate" style={{ color: C.text }}>
+                  {myNextGolf ? `${formatRoundDate(myNextGolf.date)} · ${myNextGolf.sessions.map((session) => session.label).join(' / ')}` : 'Mark your availability'}
+                </div>
+                <div className="text-sm mt-0.5" style={{ color: C.muted }}>
+                  {myNextGolf ? `${myNextGolf.bestCount} player${myNextGolf.bestCount === 1 ? '' : 's'} available` : 'Open the calendar to choose a date'}
+                </div>
               </div>
-              <span className="w-12 h-12 rounded-full flex items-center justify-center shrink-0" style={{ background: C.limeSoft, color: C.lime }}>
-                <TrophyIcon size={26} />
-              </span>
+              <span className="font-display text-3xl shrink-0" style={{ color: C.lime }}>›</span>
             </div>
           </Card>
         </button>
@@ -8364,10 +8402,12 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
   const [openTeePlayerId, setOpenTeePlayerId] = useState(null);
   const [showSideGameDetails, setShowSideGameDetails] = useState(false);
   const [selectMode, setSelectMode] = useState(false);
+  const loggedScoreInputRefs = useRef({});
   useEffect(() => {
     setOpenTeePlayerId(null);
     setShowSideGameDetails(false);
     setShowRoundDetails(false);
+    loggedScoreInputRefs.current = {};
   }, [editingRoundId]);
   const [selectedRoundIds, setSelectedRoundIds] = useState([]);
   function toggleSelectRound(id) {
@@ -8399,6 +8439,9 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
       trash: {},
       playerData: {},
       status: 'setup',
+      // Setup drafts stay on this device and are not persisted until the user
+      // finishes setup by beginning or saving the round.
+      setupDraft: true,
       currentHole: 0,
       // League/Dogfight rounds are quota games and are always scored gross;
       // effectivePointsBasis() enforces this regardless of what's stored.
@@ -8406,7 +8449,7 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
       gameId: null,
       gameData: {},
     };
-    setRounds((rs) => [r, ...rs]);
+    setRounds((rs) => [r, ...rs.filter((round) => !round.setupDraft)]);
     setEditingRoundId(r.id);
   }
   function deleteRounds(ids) {
@@ -8423,6 +8466,7 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
           ...round,
           ...patch,
           status: 'live',
+          setupDraft: false,
           entryMode: 'holebyhole',
           currentHole: patch.currentHole ?? round.currentHole ?? 0,
           startedAt: round.startedAt || new Date().toISOString(),
@@ -8436,9 +8480,16 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
       })
     );
   }
+  function beginLoggedRound(id) {
+    patchRound(id, {
+      status: 'logging',
+      setupDraft: false,
+      startedAt: new Date().toISOString(),
+    });
+  }
   function finalizeRound(id, patch = {}) {
     setRounds((currentRounds) => {
-      const prepared = currentRounds.map((round) => (round.id === id ? { ...round, ...patch } : round));
+      const prepared = currentRounds.map((round) => (round.id === id ? { ...round, ...patch, setupDraft: false } : round));
       return finalizeRoundCollection(prepared, id, settings, players, courses);
     });
   }
@@ -9321,11 +9372,14 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
           </Card>
         )}
 
-        {(editing.logged || (editing.casual && currentCasualGame?.scoring !== 'teamscore')) && (
+        {((!editing.setupDraft && editing.logged) || (editing.casual && currentCasualGame?.scoring !== 'teamscore')) && (
         <Card>
           <div className="font-display text-lg mb-2" style={{ color: C.text }}>
             Scores — {scoredCount}/{activePlayers.length} entered
           </div>
+          <p className="text-xs mb-2" style={{ color: C.muted }}>
+            Quotas are automatically calculated from each player’s GHIN handicap and selected tees.
+          </p>
           {activePlayers.length === 0 && (
             <p className="text-sm" style={{ color: C.muted }}>
               Select who's playing above to start entering scores.
@@ -9347,7 +9401,7 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
                     <input
                       type="number"
                       className="w-12 text-center text-sm rounded-lg px-1 py-0.5 outline-none"
-                      style={{ background: C.surface2, color: C.muted }}
+                      style={{ background: C.surface2, color: C.muted, fontSize: 16 }}
                       value={editing.playerData[p.id]?.quotaOverride ?? quota}
                       onChange={(e) => patchPlayerData(editing.id, p.id, { quotaOverride: e.target.value === '' ? null : Number(e.target.value) })}
                     />
@@ -9360,7 +9414,7 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
                       <input
                         type="number"
                         className="w-14 text-center text-sm rounded-lg px-1 py-0.5 outline-none"
-                        style={{ background: C.surface2, color: C.text }}
+                        style={{ background: C.surface2, color: C.text, fontSize: 16 }}
                         value={editing.playerData[p.id]?.points ?? ''}
                         onChange={(e) => patchPlayerData(editing.id, p.id, { points: e.target.value === '' ? null : Number(e.target.value) })}
                       />
@@ -9385,7 +9439,7 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
         </Card>
         )}
 
-        {editing.entryMode === 'holebyhole' && activePlayers.length > 0 && (editing.logged || (editing.casual && currentCasualGame?.scoring !== 'teamscore')) && (
+        {editing.entryMode === 'holebyhole' && activePlayers.length > 0 && ((!editing.setupDraft && editing.logged) || (editing.casual && currentCasualGame?.scoring !== 'teamscore')) && (
           <Card style={editing.logged ? { border: `1.5px solid ${C.lime}` } : undefined}>
             <div className="font-display text-lg mb-1" style={{ color: C.text }}>
               {editing.logged ? '✎ Scorecard' : 'Hole-by-hole'}
@@ -9393,7 +9447,7 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
             {editing.logged && (
               <p className="text-xs mb-2" style={{ color: C.muted }}>
                 Type each player's gross score per hole. Quota and points come from the tee each
-                player is on above. Saves as you go — hit <b style={{ color: C.text }}>Save round</b>{' '}
+                player is on above. Each entry advances to the next hole. Saves as you go — hit <b style={{ color: C.text }}>Save round</b>{' '}
                 when the card is complete.
               </p>
             )}
@@ -9449,7 +9503,7 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
                     <div key={ci} className="py-1 mb-1" style={{ borderBottom: `1px solid ${C.border}`, background: C.surface2 }} />
                   )
                 )}
-                {activePlayers.map((p) => {
+                {activePlayers.map((p, playerIndex) => {
                   const scores = holes.map((h, i) => editing.playerData[p.id]?.holeScores?.[i]);
                   return (
                   <React.Fragment key={p.id}>
@@ -9490,9 +9544,28 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
                       return (
                         <div key={ci} className="py-1 flex items-center justify-center">
                           <input
+                            ref={(node) => {
+                              const key = `${editing.id}:${p.id}:${i}`;
+                              if (node) loggedScoreInputRefs.current[key] = node;
+                              else delete loggedScoreInputRefs.current[key];
+                            }}
                             type="number"
+                            inputMode="numeric"
                             value={v ?? ''}
-                            onChange={(e) => setHoleScore(editing.id, p.id, i, e.target.value === '' ? null : Number(e.target.value))}
+                            onChange={(e) => {
+                              const rawValue = e.target.value;
+                              setHoleScore(editing.id, p.id, i, rawValue === '' ? null : Number(rawValue));
+                              if (!editing.logged || rawValue === '') return;
+                              const nextPlayer = i + 1 < holes.length ? p : activePlayers[playerIndex + 1];
+                              const nextHole = i + 1 < holes.length ? i + 1 : 0;
+                              if (!nextPlayer) return;
+                              requestAnimationFrame(() => {
+                                const nextInput = loggedScoreInputRefs.current[`${editing.id}:${nextPlayer.id}:${nextHole}`];
+                                if (!nextInput) return;
+                                nextInput.focus();
+                                if (typeof nextInput.select === 'function') nextInput.select();
+                              });
+                            }}
                             className="w-8 h-8 text-center text-xs outline-none"
                             style={{
                               background: C.surface2,
@@ -9501,6 +9574,9 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
                               borderRadius: shape === 'circle' ? '50%' : shape === 'square' ? 4 : 8,
                               boxShadow: dbl ? `0 0 0 1.5px ${C.surface}, 0 0 0 3px ${col}` : 'none',
                               boxSizing: 'border-box',
+                              // Mobile Safari zooms the page when a focused
+                              // input's computed font size is below 16px.
+                              fontSize: 16,
                             }}
                           />
                         </div>
@@ -9516,25 +9592,39 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
 
         {editing.logged ? (
           <>
-            <PrimaryButton
-              onClick={() => {
-                finalizeRound(editing.id, {
-                  entryMode: 'holebyhole',
-                  startedAt: editing.startedAt || new Date().toISOString(),
-                });
-              }}
-              disabled={activePlayers.length === 0 || !teesConfirmed || missingLoggedScores > 0}
-              style={{ width: '100%', textAlign: 'center', marginBottom: 8, paddingTop: 16, paddingBottom: 16, fontSize: 16 }}
-            >
-              {!teesConfirmed
-                ? '⛳ Select your tees first'
-                : loggedScoresEntered === 0
-                ? '✎ Enter scores below'
-                : missingLoggedScores > 0
-                ? `${missingLoggedScores} score${missingLoggedScores === 1 ? '' : 's'} remaining`
-                : '✓ Save round'}
-            </PrimaryButton>
-            {teesConfirmed && activePlayers.length > 0 && missingLoggedScores > 0 && (
+            {editing.setupDraft ? (
+              <PrimaryButton
+                onClick={() => beginLoggedRound(editing.id)}
+                disabled={activePlayers.length === 0 || !teesConfirmed}
+                style={{ width: '100%', textAlign: 'center', marginBottom: 8, paddingTop: 16, paddingBottom: 16, fontSize: 16 }}
+              >
+                {activePlayers.length === 0
+                  ? 'Select players to continue'
+                  : !teesConfirmed
+                  ? `Confirm ${editing.teeName} tees to continue`
+                  : 'Continue to Scorecard'}
+              </PrimaryButton>
+            ) : (
+              <PrimaryButton
+                onClick={() => {
+                  finalizeRound(editing.id, {
+                    entryMode: 'holebyhole',
+                    startedAt: editing.startedAt || new Date().toISOString(),
+                  });
+                }}
+                disabled={activePlayers.length === 0 || !teesConfirmed || missingLoggedScores > 0}
+                style={{ width: '100%', textAlign: 'center', marginBottom: 8, paddingTop: 16, paddingBottom: 16, fontSize: 16 }}
+              >
+                {!teesConfirmed
+                  ? '⛳ Select your tees first'
+                  : loggedScoresEntered === 0
+                  ? '✎ Enter scores below'
+                  : missingLoggedScores > 0
+                  ? `${missingLoggedScores} score${missingLoggedScores === 1 ? '' : 's'} remaining`
+                  : '✓ Save round'}
+              </PrimaryButton>
+            )}
+            {!editing.setupDraft && teesConfirmed && activePlayers.length > 0 && missingLoggedScores > 0 && (
               <div className="text-xs text-center mb-2" style={{ color: loggedScoresEntered > 0 ? C.orange : C.muted }}>
                 Fill every selected player’s scorecard before saving · {loggedScoresEntered}/{loggedScoresRequired} entered
               </div>
@@ -9649,12 +9739,12 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
                   CASUAL
                 </span>
               )}
-              {r.status === 'live' && (
+              {(r.status === 'live' || r.status === 'logging') && (
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-bold live-pulse" style={{ background: C.red, color: '#fff' }}>
-                  ● LIVE
+                  {r.status === 'logging' ? '✎ LOGGING' : '● LIVE'}
                 </span>
               )}
-              {r.logged && r.status !== 'final' && (
+              {r.logged && r.status !== 'final' && r.status !== 'logging' && (
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-bold" style={{ background: C.surface2, color: C.lime, border: `1px solid ${C.lime}` }}>
                   ✎ LOGGING
                 </span>
@@ -9688,7 +9778,7 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
     );
   }
 
-  const visibleRounds = rounds.filter((r) => !r.casual);
+  const visibleRounds = rounds.filter((r) => !r.casual && !r.setupDraft);
 
   function confirmDeleteSelected() {
     if (selectedRoundIds.length === 0) return;
@@ -9737,7 +9827,7 @@ function RoundsTab({ settings, players, courses, rounds, setRounds, editingRound
       )}
 
       {(() => {
-        const liveRounds = visibleRounds.filter((r) => r.status === 'live');
+        const liveRounds = visibleRounds.filter((r) => r.status === 'live' || r.status === 'logging');
         const setupRounds = visibleRounds.filter((r) => !r.status || r.status === 'setup');
         const finalRounds = visibleRounds.filter((r) => r.status === 'final');
         return (
@@ -11039,7 +11129,7 @@ function DogfightLeague() {
           setRounds((cur) => {
             if (cur.length) {
               const batch = db.batch();
-              cur.filter((r) => !r.casual).forEach((r) => {
+              cur.filter((r) => !r.casual && !r.setupDraft).forEach((r) => {
                 batch.set(base.collection('rounds').doc(r.id), r, { merge: true });
                 lastSyncedRef.current.rounds[r.id] = JSON.stringify(r);
               });
@@ -11072,12 +11162,14 @@ function DogfightLeague() {
         // before their own debounced write had a chance to push it.
         setRounds((cur) => {
           const localCasual = cur.filter((r) => r.casual);
-          const localLeague = cur.filter((r) => !r.casual);
-          return [...reconcileFromCloud(localLeague, arr, prevSynced, knownIds), ...localCasual];
+          const localDrafts = cur.filter((r) => !r.casual && r.setupDraft);
+          const localLeague = cur.filter((r) => !r.casual && !r.setupDraft);
+          return [...localDrafts, ...reconcileFromCloud(localLeague, arr, prevSynced, knownIds), ...localCasual];
         });
       }, onErr);
 
       const unsub3 = base.collection('availability').onSnapshot((snap) => {
+        const isFirstAvailabilitySnapshot = firstSnap.availability;
         if (snap.empty && firstSnap.availability) {
           firstSnap.availability = false;
           setAvailability((cur) => {
@@ -11101,8 +11193,11 @@ function DogfightLeague() {
           obj[doc.id] = doc.data();
           map[doc.id] = JSON.stringify(doc.data());
         });
+        const prevSynced = lastSyncedRef.current.availability;
         lastSyncedRef.current.availability = map;
-        setAvailability(obj);
+        setAvailability((cur) => isFirstAvailabilitySnapshot
+          ? obj
+          : reconcileAvailabilityFromCloud(cur, obj, prevSynced));
       }, onErr);
 
       const unsub4 = base.collection('feedback').onSnapshot((snap) => {
@@ -11178,7 +11273,7 @@ function DogfightLeague() {
           JSON.stringify({
             settings,
             players,
-            rounds,
+            rounds: rounds.filter((round) => !round.setupDraft),
             availability,
             feedbackItems,
             theme,
@@ -11196,6 +11291,7 @@ function DogfightLeague() {
           const base = db.collection('leagues').doc(cloudLeagueId);
           const batch = db.batch();
           let dirty = false;
+          const syncedAvailability = {};
           const prevLocal = prevLocalRef.current;
 
           const curPlayerIds = new Set(players.map((p) => p.id));
@@ -11219,7 +11315,7 @@ function DogfightLeague() {
             });
           }
 
-          const leagueRoundsForSync = rounds.filter((r) => !r.casual);
+          const leagueRoundsForSync = rounds.filter((r) => !r.casual && !r.setupDraft);
           const curRoundIds = new Set(leagueRoundsForSync.map((r) => r.id));
           leagueRoundsForSync.forEach((r) => {
             const j = JSON.stringify(r);
@@ -11259,17 +11355,50 @@ function DogfightLeague() {
           curAvailKeys.forEach((key) => {
             const j = JSON.stringify(availability[key]);
             if (lastSyncedRef.current.availability[key] !== j) {
-              batch.set(base.collection('availability').doc(key), availability[key], { merge: true });
-              lastSyncedRef.current.availability[key] = j;
+              let cloudDay = {};
+              try { cloudDay = JSON.parse(lastSyncedRef.current.availability[key] || '{}') || {}; } catch (e) {}
+              const localDay = availability[key];
+              const patch = {};
+              new Set([...Object.keys(cloudDay), ...Object.keys(localDay)]).forEach((playerId) => {
+                const cloudChoice = { am: false, pm: false, ...(cloudDay[playerId] || {}) };
+                const localChoice = { am: false, pm: false, ...(localDay[playerId] || {}) };
+                const changedSessions = {};
+                ['am', 'pm'].forEach((session) => {
+                  if (cloudChoice[session] !== localChoice[session]) changedSessions[session] = localChoice[session];
+                });
+                if (Object.keys(changedSessions).length) patch[playerId] = changedSessions;
+              });
+              if (Object.keys(patch).length) {
+                // Merge only the AM/PM values this device actually changed.
+                // Replacing a whole player (or date) could erase a selection
+                // another device made after our most recent snapshot.
+                batch.set(base.collection('availability').doc(key), patch, { merge: true });
+              }
+              syncedAvailability[key] = j;
               dirty = true;
             }
           });
           if (prevLocal) {
             prevLocal.availKeys.forEach((key) => {
               if (!curAvailKeys.has(key) && lastSyncedRef.current.availability[key] !== undefined) {
-                batch.delete(base.collection('availability').doc(key));
-                delete lastSyncedRef.current.availability[key];
-                dirty = true;
+                let cloudDay = {};
+                try { cloudDay = JSON.parse(lastSyncedRef.current.availability[key] || '{}') || {}; } catch (e) {}
+                const clearPatch = {};
+                Object.keys(cloudDay).forEach((playerId) => {
+                  const choice = cloudDay[playerId] || {};
+                  const cleared = {};
+                  if (choice.am) cleared.am = false;
+                  if (choice.pm) cleared.pm = false;
+                  if (Object.keys(cleared).length) clearPatch[playerId] = cleared;
+                });
+                if (Object.keys(clearPatch).length) {
+                  // Never delete the whole date document: somebody else may
+                  // have just added a player to it. Clear only sessions that
+                  // were present in this device's last cloud baseline.
+                  batch.set(base.collection('availability').doc(key), clearPatch, { merge: true });
+                  syncedAvailability[key] = JSON.stringify(clearPatch);
+                  dirty = true;
+                }
               }
             });
           }
@@ -11291,12 +11420,15 @@ function DogfightLeague() {
           }
 
           if (dirty) await batch.commit();
+          Object.keys(syncedAvailability).forEach((key) => {
+            lastSyncedRef.current.availability[key] = syncedAvailability[key];
+          });
           // Baseline for the next pass's deletion check. Only updated after a
           // successful sync attempt, so a failed commit can't cause a spurious
           // "it disappeared" conclusion next time round.
           prevLocalRef.current = {
             playerIds: new Set(players.map((p) => p.id)),
-            roundIds: new Set(rounds.filter((r) => !r.casual).map((r) => r.id)),
+            roundIds: new Set(rounds.filter((r) => !r.casual && !r.setupDraft).map((r) => r.id)),
             availKeys: new Set(Object.keys(availability)),
           };
           setSaveStatus('saved');
@@ -11367,6 +11499,8 @@ function DogfightLeague() {
       trash: {},
       playerData: {},
       status: 'setup',
+      // Do not persist an abandoned setup screen as a "Not Started" round.
+      setupDraft: true,
       currentHole: 0,
       // League/Dogfight rounds are quota games and are always scored gross;
       // effectivePointsBasis() enforces this regardless of what's stored.
@@ -11377,7 +11511,7 @@ function DogfightLeague() {
       // an editable scorecard instead, for cards kept on paper.
       logged: !!logged,
     };
-    setRounds((rs) => [r, ...rs]);
+    setRounds((rs) => [r, ...rs.filter((round) => !round.setupDraft)]);
     setEditingRoundId(r.id);
     setActiveTab('rounds');
   }
