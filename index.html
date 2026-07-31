@@ -3821,20 +3821,32 @@ function HomeTab({ theme, settings, players, rounds, courses, availability, myPl
         </Card>
       )}
 
-      {myPlayer && (
-        <button onClick={() => onGoTab('calendar')} className="w-full text-left tap" style={{ display: 'block' }}>
+      {lastEvent && lastPurse && (
+        <button onClick={() => onGoTab('rounds')} className="w-full text-left tap" style={{ display: 'block' }}>
           <Card style={homeCardStyle}>
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
-                <div className="font-display text-base" style={{ color: C.lime }}>Next Golf</div>
-                <div className="font-display text-xl mt-1 truncate" style={{ color: C.text }}>
-                  {myNextGolf ? `${formatRoundDate(myNextGolf.date)} · ${myNextGolf.sessions.map((session) => session.label).join(' / ')}` : 'Mark your availability'}
-                </div>
-                <div className="text-sm mt-0.5" style={{ color: C.muted }}>
-                  {myNextGolf ? `${myNextGolf.bestCount} player${myNextGolf.bestCount === 1 ? '' : 's'} available` : 'Open the calendar to choose a date'}
-                </div>
+                <div className="font-display text-base" style={{ color: C.lime }}>Your Last Dogfight</div>
+                <div className="font-display text-xl mt-1 truncate" style={{ color: C.text }}>{myLastResult && myPlayer ? myPlayer.name : formatRoundDate(lastEvent.date)}</div>
+                {myLastResult && myPlayer ? (
+                  <>
+                    <div className="text-sm mt-1 truncate" style={{ color: myLastResult.result >= 0 ? C.lime : C.red }}>
+                      {signed(myLastResult.result)} vs quota · {myLastPlaceIndex >= 0 ? ordinal(myLastPlaceIndex + 1) : '—'} place
+                      {myLastNet != null && <span style={{ color: myLastNet > 0 ? C.lime : myLastNet < 0 ? C.red : 'inherit' }}> · {moneySigned(myLastNet)}</span>}
+                    </div>
+                    {lastWinner && (
+                      <div className="text-sm mt-0.5 truncate" style={{ color: C.muted }}>Winner: {lastWinner.name} · {signed(lastWinnerRow.result)}</div>
+                    )}
+                  </>
+                ) : (
+                  <div className="text-sm mt-1 truncate" style={{ color: C.muted }}>
+                    {lastWinner ? `Winner: ${lastWinner.name} · ${signed(lastWinnerRow.result)}` : lastCourse?.name || 'Completed round'}
+                  </div>
+                )}
               </div>
-              <span className="font-display text-3xl shrink-0" style={{ color: C.lime }}>›</span>
+              <span className="w-12 h-12 rounded-full flex items-center justify-center shrink-0" style={{ background: C.limeSoft, color: C.lime }}>
+                <TrophyIcon size={26} />
+              </span>
             </div>
           </Card>
         </button>
@@ -3866,32 +3878,20 @@ function HomeTab({ theme, settings, players, rounds, courses, availability, myPl
         </Card>
       </button>
 
-      {lastEvent && lastPurse && (
-        <button onClick={() => onGoTab('rounds')} className="w-full text-left tap" style={{ display: 'block' }}>
+      {myPlayer && (
+        <button onClick={() => onGoTab('calendar')} className="w-full text-left tap" style={{ display: 'block' }}>
           <Card style={homeCardStyle}>
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
-                <div className="font-display text-base" style={{ color: C.lime }}>Your Last Dogfight</div>
-                <div className="font-display text-xl mt-1 truncate" style={{ color: C.text }}>{myLastResult && myPlayer ? myPlayer.name : formatRoundDate(lastEvent.date)}</div>
-                {myLastResult && myPlayer ? (
-                  <>
-                    <div className="text-sm mt-1 truncate" style={{ color: myLastResult.result >= 0 ? C.lime : C.red }}>
-                      {signed(myLastResult.result)} vs quota · {myLastPlaceIndex >= 0 ? ordinal(myLastPlaceIndex + 1) : '—'} place
-                      {myLastNet != null && <span style={{ color: myLastNet > 0 ? C.lime : myLastNet < 0 ? C.red : 'inherit' }}> · {moneySigned(myLastNet)}</span>}
-                    </div>
-                    {lastWinner && (
-                      <div className="text-sm mt-0.5 truncate" style={{ color: C.muted }}>Winner: {lastWinner.name} · {signed(lastWinnerRow.result)}</div>
-                    )}
-                  </>
-                ) : (
-                  <div className="text-sm mt-1 truncate" style={{ color: C.muted }}>
-                    {lastWinner ? `Winner: ${lastWinner.name} · ${signed(lastWinnerRow.result)}` : lastCourse?.name || 'Completed round'}
-                  </div>
-                )}
+                <div className="font-display text-base" style={{ color: C.lime }}>Next Tee Time</div>
+                <div className="font-display text-xl mt-1 truncate" style={{ color: C.text }}>
+                  {myNextGolf ? `${formatRoundDate(myNextGolf.date)} · ${myNextGolf.sessions.map((session) => session.label).join(' / ')}` : 'Mark your availability'}
+                </div>
+                <div className="text-sm mt-0.5" style={{ color: C.muted }}>
+                  {myNextGolf ? `${myNextGolf.bestCount} player${myNextGolf.bestCount === 1 ? '' : 's'} available` : 'Open the calendar to choose a date'}
+                </div>
               </div>
-              <span className="w-12 h-12 rounded-full flex items-center justify-center shrink-0" style={{ background: C.limeSoft, color: C.lime }}>
-                <TrophyIcon size={26} />
-              </span>
+              <span className="font-display text-3xl shrink-0" style={{ color: C.lime }}>›</span>
             </div>
           </Card>
         </button>
