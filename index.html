@@ -2210,6 +2210,267 @@ function currentTranslateX(element) {
   }
 }
 
+function SwipeDismissDrawer({ open, onClose, children, ariaLabel = 'More menu' }) {
+  const drawerRef = useRef(null);
+  const backdropRef = useRef(null);
+  const gestureRef = useRef(null);
+  const rafRef = useRef(null);
+  const settleTimerRef = useRef(null);
+  const returnFocusRef = useRef(null);
+  const wasOpenRef = useRef(false);
+
+  function paint(offset) {
+    const drawer = drawerRef.current;
+    const backdrop = backdropRef.current;
+    if (!drawer || !backdrop) return;
+    const width = Math.max(1, drawer.getBoundingClientRect().width);
+    const clamped = Math.max(0, Math.min(width, offset));
+    const progress = clamped / width;
+    drawer.style.transform = `translate3d(${clamped}px,0,0)`;
+    drawer.style.boxShadow = progress > 0.96 ? 'none' : `-${Math.round(24 * (1 - progress))}px 0 ${Math.round(48 * (1 - progress))}px rgba(0,0,0,${0.45 * (1 - progress)})`;
+    backdrop.style.opacity = String(1 - progress);
+  }
+
+  function closeImmediately() {
+    if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+    gestureRef.current = null;
+    onClose();
+  }
+
+  function settle(complete, velocity = 0) {
+    const drawer = drawerRef.current;
+    const backdrop = backdropRef.current;
+    const g = gestureRef.current;
+    if (!drawer || !backdrop) {
+      if (complete) onClose();
+      return;
+    }
+    const width = Math.max(1, drawer.getBoundingClientRect().width);
+    const current = Math.max(0, Math.min(width, g?.offset ?? currentTranslateX(drawer)));
+    const target = complete ? width : 0;
+    const distance = Math.abs(target - current);
+    const speed = Math.max(0.3, Math.abs(velocity || 0));
+    const reduced = prefersReducedMotion();
+    const duration = reduced ? 1 : Math.max(170, Math.min(340, 155 + distance / speed * 0.1));
+    drawer.style.transition = `transform ${duration}ms ${complete ? IOS_GESTURE_SETTLE : IOS_GESTURE_EASING}, box-shadow ${duration}ms ease`;
+    backdrop.style.transition = `opacity ${duration}ms ease`;
+    paint(target);
+    settleTimerRef.current = setTimeout(() => {
+      if (complete) {
+        gestureFeedback('light');
+        onClose();
+      } else {
+        drawer.style.transition = '';
+        backdrop.style.transition = '';
+        paint(0);
+      }
+      gestureRef.current = null;
+    }, duration + 18);
+  }
+
+  function onPointerDown(e) {
+    if (!open || e.isPrimary === false || e.button > 0) return;
+    if (e.target.closest('input, textarea, select, [data-swipe-ignore="true"]')) return;
+    const drawer = drawerRef.current;
+    if (!drawer) return;
+    if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    const interruptedOffset = Math.max(0, currentTranslateX(drawer));
+    drawer.style.transition = 'none';
+    if (backdropRef.current) backdropRef.current.style.transition = 'none';
+    gestureRef.current = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      startOffset: interruptedOffset,
+      offset: interruptedOffset,
+      lastX: e.clientX,
+      lastTime: performance.now(),
+      velocity: 0,
+      lock: null,
+      didDrag: false,
+      thresholdFeedback: false,
+      width: Math.max(1, drawer.getBoundingClientRect().width),
+    };
+  }
+
+  function onPointerMove(e) {
+    const g = gestureRef.current;
+    if (!g || g.pointerId !== e.pointerId) return;
+    const pointerDx = e.clientX - g.startX;
+    const dy = e.clientY - g.startY;
+    if (!g.lock && Math.max(Math.abs(pointerDx), Math.abs(dy)) > 9) {
+      const canMoveBackLeft = g.startOffset > 0;
+      g.lock = Math.abs(pointerDx) > Math.abs(dy) * 1.2 && (pointerDx > 0 || canMoveBackLeft) ? 'horizontal' : 'vertical';
+      if (g.lock === 'vertical') {
+        gestureRef.current = null;
+        return;
+      }
+      if (e.currentTarget.setPointerCapture) e.currentTarget.setPointerCapture(e.pointerId);
+    }
+    if (g.lock !== 'horizontal') return;
+    e.preventDefault();
+    const now = performance.now();
+    const elapsed = Math.max(1, now - g.lastTime);
+    const instantaneousVelocity = (e.clientX - g.lastX) / elapsed;
+    g.velocity = g.velocity * 0.7 + instantaneousVelocity * 0.3;
+    g.lastX = e.clientX;
+    g.lastTime = now;
+    g.offset = Math.max(0, Math.min(g.width, g.startOffset + pointerDx));
+    g.didDrag = g.didDrag || Math.abs(g.offset - g.startOffset) > 8;
+    const crossed = g.offset / g.width >= 0.32;
+    if (crossed && !g.thresholdFeedback) {
+      g.thresholdFeedback = true;
+      gestureFeedback('light');
+    } else if (!crossed) {
+      g.thresholdFeedback = false;
+    }
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      paint(g.offset);
+    });
+  }
+
+  function endGesture(cancelled = false) {
+    const g = gestureRef.current;
+    if (!g || g.settling) return;
+    if (g.lock !== 'horizontal') {
+      gestureRef.current = null;
+      return;
+    }
+    g.settling = true;
+    const progress = g.offset / Math.max(1, g.width);
+    const fastRightward = g.velocity > 0.5 && g.offset >= Math.max(56, g.width * 0.18);
+    const complete = !cancelled && (progress >= 0.32 || fastRightward);
+    settle(complete, g.velocity);
+  }
+
+  useEffect(() => {
+    const drawer = drawerRef.current;
+    const backdrop = backdropRef.current;
+    if (open && !wasOpenRef.current) {
+      returnFocusRef.current = document.activeElement;
+      if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+      if (drawer) {
+        drawer.style.transition = prefersReducedMotion() ? 'none' : `transform 340ms ${IOS_GESTURE_EASING}, box-shadow 300ms ease`;
+      }
+      if (backdrop) backdrop.style.transition = prefersReducedMotion() ? 'none' : 'opacity 300ms ease';
+      nextPaint(() => {
+        paint(0);
+        drawerRef.current?.querySelector('[aria-label="Close menu"]')?.focus();
+      });
+    } else if (!open && wasOpenRef.current) {
+      const focusTarget = returnFocusRef.current;
+      if (focusTarget && typeof focusTarget.focus === 'function') focusTarget.focus();
+    }
+    wasOpenRef.current = open;
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    function onKeyDown(e) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeImmediately();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      const drawer = drawerRef.current;
+      if (!drawer) return;
+      const focusable = Array.from(drawer.querySelectorAll('button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'))
+        .filter((element) => element.getClientRects().length > 0);
+      if (!focusable.length) {
+        e.preventDefault();
+        drawer.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [open]);
+
+  useEffect(() => () => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+  }, []);
+
+  const reduced = prefersReducedMotion();
+  return (
+    <div
+      aria-hidden={!open}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 60,
+        pointerEvents: open ? 'auto' : 'none',
+        visibility: open ? 'visible' : 'hidden',
+        transition: reduced ? 'none' : `visibility 0s linear ${open ? '0s' : '340ms'}`,
+      }}
+    >
+      <div
+        ref={backdropRef}
+        onClick={closeImmediately}
+        style={{
+          position: 'absolute',
+          inset: 0,
+          background: 'rgba(0,0,0,0.6)',
+          opacity: open ? 1 : 0,
+          transition: reduced ? 'none' : 'opacity 300ms ease',
+        }}
+      />
+      <div style={{ position: 'absolute', inset: 0, maxWidth: 480, margin: '0 auto', pointerEvents: 'none' }}>
+        <div
+          ref={drawerRef}
+          role="dialog"
+          aria-modal={open ? 'true' : undefined}
+          aria-label={ariaLabel}
+          tabIndex={-1}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={() => endGesture(false)}
+          onPointerCancel={() => endGesture(true)}
+          onClickCapture={(e) => {
+            if (gestureRef.current?.didDrag) {
+              e.preventDefault();
+              e.stopPropagation();
+            }
+          }}
+          style={{
+            position: 'absolute',
+            top: 0,
+            right: 0,
+            height: '100%',
+            width: '76%',
+            maxWidth: 300,
+            background: C.surface,
+            borderLeft: `1px solid ${C.border}`,
+            transform: open ? 'translate3d(0,0,0)' : 'translate3d(100%,0,0)',
+            transition: reduced ? 'none' : `transform 340ms ${IOS_GESTURE_EASING}`,
+            boxShadow: open ? '-24px 0 48px rgba(0,0,0,0.45)' : 'none',
+            display: 'flex',
+            flexDirection: 'column',
+            pointerEvents: 'auto',
+            touchAction: 'pan-y',
+            willChange: open ? 'transform' : 'auto',
+          }}
+        >
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function InteractiveEdgeBack({ children, underlay, onBack, enabled = true, ariaLabel = 'Swipe from the left edge to go back' }) {
   const rootRef = useRef(null);
   const pageRef = useRef(null);
@@ -2893,7 +3154,7 @@ function EmptyNote({ text }) {
     </Card>
   );
 }
-function ConfirmDialog({ title, message, confirmLabel = 'Delete', onConfirm, onCancel }) {
+function ConfirmDialog({ title, message, confirmLabel = 'Delete', destructive = true, onConfirm, onCancel }) {
   return (
     <div
       className="fixed inset-0 flex items-center justify-center p-4 backdrop-fade"
@@ -2903,7 +3164,7 @@ function ConfirmDialog({ title, message, confirmLabel = 'Delete', onConfirm, onC
       <div
         onClick={(e) => e.stopPropagation()}
         className="w-full rounded-3xl p-5 modal-pop"
-        style={{ maxWidth: 380, background: C.surface, border: `1.5px solid ${C.red}` }}
+        style={{ maxWidth: 380, background: C.surface, border: `1.5px solid ${destructive ? C.red : C.lime}` }}
       >
         <div className="font-display text-xl mb-2" style={{ color: C.text }}>
           {title}
@@ -2915,7 +3176,7 @@ function ConfirmDialog({ title, message, confirmLabel = 'Delete', onConfirm, onC
           <GhostButton onClick={onCancel} style={{ flex: 1, textAlign: 'center' }}>
             Cancel
           </GhostButton>
-          <PrimaryButton onClick={onConfirm} style={{ flex: 1, textAlign: 'center', background: C.red, color: '#fff' }}>
+          <PrimaryButton onClick={onConfirm} style={{ flex: 1, textAlign: 'center', background: destructive ? C.red : C.lime, color: destructive ? '#fff' : C.onAccent }}>
             {confirmLabel}
           </PrimaryButton>
         </div>
@@ -7964,6 +8225,8 @@ function RoundSummary({ round, course, players, courses, rounds, settings, onDon
         <ConfirmDialog
           title="Edit this finalized round?"
           message="This round is locked as a historical snapshot. Reopening it allows scores, tees, and results to change. The current snapshot stays preserved until you intentionally finish the round again, which creates a new revision."
+          confirmLabel="Edit Round"
+          destructive={false}
           onCancel={() => setConfirmReopen(false)}
           onConfirm={() => {
             setConfirmReopen(false);
@@ -11128,29 +11391,8 @@ function DogfightLeague() {
         )}
 
         {/* slide-in nav drawer, opened from the More bottom tab */}
-        {!isLiveRoundMode && <div style={{ position: 'fixed', inset: 0, zIndex: 60, pointerEvents: menuOpen ? 'auto' : 'none' }}>
-          <div
-            onClick={() => setMenuOpen(false)}
-            style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.6)', opacity: menuOpen ? 1 : 0, transition: 'opacity 0.3s ease' }}
-          />
-          <div style={{ position: 'absolute', inset: 0, maxWidth: 480, margin: '0 auto' }}>
-            <div
-              style={{
-                position: 'absolute',
-                top: 0,
-                right: 0,
-                height: '100%',
-                width: '76%',
-                maxWidth: 300,
-                background: C.surface,
-                borderLeft: `1px solid ${C.border}`,
-                transform: menuOpen ? 'translateX(0)' : 'translateX(100%)',
-                transition: 'transform 0.34s cubic-bezier(0.16,1,0.3,1)',
-                boxShadow: menuOpen ? '-24px 0 48px rgba(0,0,0,0.45)' : 'none',
-                display: 'flex',
-                flexDirection: 'column',
-              }}
-            >
+        {!isLiveRoundMode && (
+          <SwipeDismissDrawer open={menuOpen} onClose={() => setMenuOpen(false)} ariaLabel="More menu">
               <div className="flex items-center justify-between px-4 pt-6 pb-4">
                 <span className="font-display text-lg" style={{ color: C.text }}>
                   Menu
@@ -11204,9 +11446,8 @@ function DogfightLeague() {
                   </span>
                 </div>
               </div>
-            </div>
-          </div>
-        </div>}
+          </SwipeDismissDrawer>
+        )}
 
         {RECOVERY_MODE && (
           <div
