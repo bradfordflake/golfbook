@@ -3876,7 +3876,8 @@ function HomeTab({ theme, settings, players, rounds, courses, availability, myPl
                 {myLastResult && myPlayer ? (
                   <>
                     <div className="text-sm mt-1 truncate" style={{ color: myLastResult.result >= 0 ? C.lime : C.red }}>
-                      {signed(myLastResult.result)} vs quota · {myLastPlaceIndex >= 0 ? ordinal(myLastPlaceIndex + 1) : '—'} place{myLastNet != null ? ` · ${moneySigned(myLastNet)}` : ''}
+                      {signed(myLastResult.result)} vs quota · {myLastPlaceIndex >= 0 ? ordinal(myLastPlaceIndex + 1) : '—'} place
+                      {myLastNet != null && <span style={{ color: myLastNet > 0 ? C.lime : myLastNet < 0 ? C.red : 'inherit' }}> · {moneySigned(myLastNet)}</span>}
                     </div>
                     {lastWinner && (
                       <div className="text-sm mt-0.5 truncate" style={{ color: C.muted }}>Winner: {lastWinner.name} · {signed(lastWinnerRow.result)}</div>
