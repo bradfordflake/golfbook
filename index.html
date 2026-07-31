@@ -3522,6 +3522,7 @@ function HomeTab({ theme, settings, players, rounds, courses, availability, myPl
 function StandingsTab({ settings, players, setPlayers, rounds, courses, availability, myPlayerId, onSetMyPlayer, onGoCalendar, onGoPlayers }) {
   const leagueRounds = finalLeagueRounds(rounds, settings);
   const season = computeSeason(settings, leagueRounds, courses, players);
+  const seasonPlayers = season.players;
   const [dashPlayerId, setDashPlayerId] = useState(null);
   const [eventIdx, setEventIdx] = useState(0);
   const [showSeason, setShowSeason] = useState(false);
