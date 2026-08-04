@@ -1484,7 +1484,9 @@ function matchSegment(round, course, players, startHole, endHole, net = false) {
   const end = Math.min(endHole, holes.length);
   const [a, b] = players;
   let diff = 0,
-    thru = 0;
+    thru = 0,
+    clinched = false;
+  const perHole = [];
   for (let h = startHole; h < end; h++) {
     const ag = grossOf(round, a.id, h);
     const bg = grossOf(round, b.id, h);
@@ -1492,13 +1494,19 @@ function matchSegment(round, course, players, startHole, endHole, net = false) {
     const bv = bg == null ? null : bg - (net ? strokesThisHole(round, b, course, h) : 0);
     if (av == null || bv == null) break;
     thru++;
-    if (av < bv) diff++;
-    else if (bv < av) diff--;
+    let winner = 'halved';
+    if (av < bv) { diff++; winner = 'sideA'; }
+    else if (bv < av) { diff--; winner = 'sideB'; }
+    perHole.push({ hole: h + 1, winner, statusAfter: diff });
+    const remainingNow = end - startHole - thru;
+    if (remainingNow > 0 && Math.abs(diff) > remainingNow) {
+      clinched = true;
+      break;
+    }
   }
   const segHoles = end - startHole;
   const remaining = segHoles - thru;
-  const clinched = thru > 0 && Math.abs(diff) > remaining;
-  return { diff, thru, remaining, clinched, segHoles, a, b };
+  return { diff, thru, remaining, clinched, segHoles, a, b, perHole };
 }
 function matchLabel(seg) {
   if (!seg || seg.thru === 0) return 'Not started';
@@ -1530,18 +1538,26 @@ function teamMatchSegment(round, course, players, startHole, endHole, net = fals
   };
   let diff = 0;
   let thru = 0;
+  let clinched = false;
+  const perHole = [];
   for (let h = startHole; h < end; h++) {
     const a = bestScore(teams.t1, h);
     const b = bestScore(teams.t2, h);
     if (a == null || b == null) break;
     thru++;
-    if (a < b) diff++;
-    else if (b < a) diff--;
+    let winner = 'halved';
+    if (a < b) { diff++; winner = 'sideA'; }
+    else if (b < a) { diff--; winner = 'sideB'; }
+    perHole.push({ hole: h + 1, winner, statusAfter: diff });
+    const remainingNow = end - startHole - thru;
+    if (remainingNow > 0 && Math.abs(diff) > remainingNow) {
+      clinched = true;
+      break;
+    }
   }
   const segHoles = end - startHole;
   const remaining = segHoles - thru;
-  const clinched = thru > 0 && Math.abs(diff) > remaining;
-  return { ...teams, diff, thru, remaining, clinched, segHoles };
+  return { ...teams, diff, thru, remaining, clinched, segHoles, perHole };
 }
 function teamMatchLabel(seg) {
   if (!seg || seg.thru === 0) return 'Not started';
@@ -1573,6 +1589,7 @@ function bestBallMatch(round, course, players, net) {
   let diff = 0;
   let thru = 0;
   holes.forEach((h, i) => {
+    if (Math.abs(diff) > holes.length - thru) return;
     const a = bestFor(t1, i);
     const b = bestFor(t2, i);
     let winner = null;
@@ -1594,7 +1611,7 @@ function bestBallMatch(round, course, players, net) {
   const wonB = perHole.filter((x) => x.winner === 'team2').length;
   const halved = perHole.filter((x) => x.winner === 'halved').length;
   const remaining = holes.length - thru;
-  const clinched = thru > 0 && Math.abs(diff) > remaining;
+  const clinched = thru > 0 && remaining > 0 && Math.abs(diff) > remaining;
   return { t1, t2, perHole, diff, thru, remaining, clinched, wonA, wonB, halved, holesCount: holes.length };
 }
 function bestBallLabel(bb) {
@@ -1743,23 +1760,32 @@ function sixesBoard(round, course, players, net = false) {
   const segments = rotations.map((segment, index) => {
     let diff = 0;
     let thru = 0;
+    let clinched = false;
+    const perHole = [];
     for (let i = segment.start; i < segment.end; i++) {
       const av = segment.t1.map((p) => effectiveHoleScore(round, p, course, i, net));
       const bv = segment.t2.map((p) => effectiveHoleScore(round, p, course, i, net));
       if (av.some((v) => v == null) || bv.some((v) => v == null)) break;
       const aBest = Math.min(...av);
       const bBest = Math.min(...bv);
-      if (aBest < bBest) diff++;
-      else if (bBest < aBest) diff--;
+      let winner = 'halved';
+      if (aBest < bBest) { diff++; winner = 'sideA'; }
+      else if (bBest < aBest) { diff--; winner = 'sideB'; }
       thru++;
+      perHole.push({ hole: i + 1, winner, statusAfter: diff });
+      if (segment.end - segment.start - thru > 0 && Math.abs(diff) > segment.end - segment.start - thru) {
+        clinched = true;
+        break;
+      }
     }
     const complete = thru === segment.end - segment.start;
-    if (complete) {
+    const settled = complete || clinched;
+    if (settled) {
       if (diff > 0) segment.t1.forEach((p) => { playerPoints[p.id] += 1; });
       else if (diff < 0) segment.t2.forEach((p) => { playerPoints[p.id] += 1; });
       else players.forEach((p) => { playerPoints[p.id] += 0.5; });
     }
-    return { ...segment, index, diff, thru, complete };
+    return { ...segment, index, diff, thru, remaining: segment.end - segment.start - thru, complete, settled, clinched, perHole };
   });
   return { segments, playerPoints, thru: segments.reduce((sum, s) => sum + s.thru, 0), segmentSize };
 }
@@ -1831,29 +1857,20 @@ function teamScoreBoard(round, course, players, net = false) {
     let gross = 0;
     let adjusted = 0;
     let thru = 0;
+    let parPlayed = 0;
     holes.forEach((hole, i) => {
       const value = scores[team.id]?.[i];
       if (value == null) return;
       const strokes = net ? strokesOnHole(courseHandicap, ranks[i], holes.length) : 0;
       gross += value;
       adjusted += value - strokes;
+      parPlayed += hole.par;
       thru++;
     });
-    return { ...team, courseHandicap, gross, total: net ? adjusted : gross, thru };
+    const total = net ? adjusted : gross;
+    return { ...team, courseHandicap, gross, total, relativeToPar: total - parPlayed, thru };
   });
-  let matchDiff = 0;
-  let matchThru = 0;
-  for (let i = 0; i < holes.length; i++) {
-    const a = scores.team1?.[i];
-    const b = scores.team2?.[i];
-    if (a == null || b == null) break;
-    const aNet = a - (net ? strokesOnHole(teamRows[0].courseHandicap, ranks[i], holes.length) : 0);
-    const bNet = b - (net ? strokesOnHole(teamRows[1].courseHandicap, ranks[i], holes.length) : 0);
-    if (aNet < bNet) matchDiff++;
-    else if (bNet < aNet) matchDiff--;
-    matchThru++;
-  }
-  return { ...teams, rows: teamRows, matchDiff, matchThru, holesCount: holes.length };
+  return { ...teams, rows: teamRows, holesCount: holes.length };
 }
 
 function shambleBoard(round, course, players, net = false) {
@@ -6370,6 +6387,76 @@ function BBBPicker({ players, pick, onChange }) {
   );
 }
 
+// One presentation layer for every game whose official result is match play.
+// Scoring engines own the result; this component only renders their normalized data.
+function matchPresentationState({ diff = 0, thru = 0, remaining = 0, clinched = false }) {
+  const leader = diff > 0 ? 'sideA' : diff < 0 ? 'sideB' : null;
+  const finished = thru > 0 && remaining === 0;
+  const halved = finished && diff === 0;
+  const complete = clinched || finished;
+  const dormie = !complete && leader != null && remaining > 0 && Math.abs(diff) === remaining;
+  return { leader, finished, halved, complete, dormie };
+}
+
+function MatchStatus({ sideAName, sideBName, diff = 0, thru = 0, remaining = 0, clinched = false, perHole = [], compact = false, emphasized = false, title }) {
+  const { leader, halved, complete, dormie } = matchPresentationState({ diff, thru, remaining, clinched });
+  const status = clinched
+    ? `${Math.abs(diff)} & ${remaining}`
+    : halved
+      ? 'Match Halved'
+      : diff === 0
+        ? 'All Square'
+        : `${Math.abs(diff)} UP`;
+  const recent = perHole.slice(-3);
+  const statusColor = complete ? C.cyan : leader ? C.lime : C.muted;
+  const statusTextColor = complete || leader ? C.onAccent : C.text;
+  const progressLabel = thru === 0
+    ? `${remaining} hole${remaining === 1 ? '' : 's'} to play`
+    : complete
+      ? 'Match complete'
+      : dormie
+        ? `Dormie · ${remaining} hole${remaining === 1 ? '' : 's'} remaining`
+        : `${remaining} hole${remaining === 1 ? '' : 's'} remaining`;
+  const containerStyle = compact
+    ? { background: emphasized ? C.surface2 : 'transparent', border: `1px solid ${emphasized ? C.limeRing : 'transparent'}`, borderRadius: 12, padding: emphasized ? '10px' : '8px 0', opacity: complete ? 0.78 : 1 }
+    : { background: C.surface2, border: `1px solid ${C.border}` };
+  return (
+    <div className={compact ? '' : 'rounded-2xl p-4'} style={containerStyle}>
+      {title && <div className="text-[10px] uppercase tracking-wide mb-2" style={{ color: C.muted }}>{title}</div>}
+      <div className="grid items-center gap-3" style={{ gridTemplateColumns: 'minmax(0,1fr) auto minmax(0,1fr)' }}>
+        <div className="min-w-0">
+          <div className="font-display truncate" style={{ fontSize: compact ? 14 : 18, color: C.text, fontWeight: leader === 'sideA' ? 800 : 600 }}>{sideAName}</div>
+          {leader === 'sideA' && <div className="text-[10px] uppercase font-bold mt-1" style={{ color: C.lime }}>Leading</div>}
+        </div>
+        <div className="text-center px-1">
+          <div className="font-display leading-none rounded-full inline-block" style={{ fontSize: compact ? 16 : 25, color: statusTextColor, background: statusColor, padding: compact ? '5px 9px' : '7px 13px' }}>{status}</div>
+          <div className="text-[10px] mt-1.5" style={{ color: C.muted }}>
+            {thru === 0 ? 'Not started' : clinched ? `Final through ${thru}` : `Through ${thru}`}
+          </div>
+          <div className="text-[10px] font-semibold mt-0.5" style={{ color: dormie ? C.orange : C.faint }}>{progressLabel}</div>
+        </div>
+        <div className="min-w-0 text-right">
+          <div className="font-display truncate" style={{ fontSize: compact ? 14 : 18, color: C.text, fontWeight: leader === 'sideB' ? 800 : 600 }}>{sideBName}</div>
+          {leader === 'sideB' && <div className="text-[10px] uppercase font-bold mt-1" style={{ color: C.lime }}>Leading</div>}
+        </div>
+      </div>
+      {recent.length > 0 && !compact && (
+        <div className="flex items-center justify-center gap-2 mt-4 pt-3" style={{ borderTop: `1px solid ${C.border}` }} aria-label={`Recent holes for ${sideAName}`}>
+          <span className="sr-only">Recent holes for {sideAName}. W means won, H means halved, L means lost.</span>
+          {recent.map((hole) => (
+            <div key={hole.hole} className="text-center" title={hole.winner === 'halved' ? `Hole ${hole.hole}: Halved` : `Hole ${hole.hole}: ${hole.winner === 'sideA' ? sideAName : sideBName} won`}>
+              <div className="text-[9px]" style={{ color: C.faint }}>H{hole.hole}</div>
+              <div className="rounded-full flex items-center justify-center text-[10px] font-bold mt-1" style={{ width: 24, height: 24, color: hole.winner === 'halved' ? C.muted : C.onAccent, background: hole.winner === 'sideA' ? C.cyan : hole.winner === 'sideB' ? C.pink : C.surface, border: `1px solid ${C.border}` }}>
+                {hole.winner === 'halved' ? 'H' : hole.winner === 'sideA' ? 'W' : 'L'}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function GameScoreboardCard({ settings, round, course, players, patchGameData, readOnly }) {
   const game = GAME_LIBRARY.find((g) => g.id === round.gameId) || null;
   const scoring = game?.scoring || 'quota';
@@ -6460,20 +6547,8 @@ function GameScoreboardCard({ settings, round, course, players, patchGameData, r
     const seg = matchSegment(round, course, activePlayers, 0, holes.length, useNet);
     return (
       <Card>
-        <div className="font-display text-lg mb-2" style={{ color: C.text }}>
-          {game.name}
-        </div>
-        <div className="flex items-center justify-between py-2">
-          <span className="font-display text-lg" style={{ color: seg.diff > 0 ? C.gold : C.text }}>
-            {seg.a.name}
-          </span>
-          <span className="font-display text-xs" style={{ color: C.muted }}>
-            {matchLabel(seg)}
-          </span>
-          <span className="font-display text-lg" style={{ color: seg.diff < 0 ? C.gold : C.text }}>
-            {seg.b.name}
-          </span>
-        </div>
+        <div className="font-display text-lg mb-2" style={{ color: C.text }}>{game.name}</div>
+        <MatchStatus sideAName={seg.a.name} sideBName={seg.b.name} {...seg} />
       </Card>
     );
   }
@@ -6485,34 +6560,8 @@ function GameScoreboardCard({ settings, round, course, players, patchGameData, r
     }
     return (
       <Card>
-        <div className="font-display text-lg mb-2" style={{ color: C.text }}>
-          {game.name}
-        </div>
-        <div className="flex items-center justify-between py-2">
-          <div className="flex-1 min-w-0">
-            <div className="text-[10px] uppercase" style={{ color: C.cyan }}>
-              Team A
-            </div>
-            {bb.t1.map((p) => (
-              <div key={p.id} className="text-sm truncate" style={{ color: C.text }}>
-                {p.name}
-              </div>
-            ))}
-          </div>
-          <span className="font-display text-xs px-2 text-center shrink-0" style={{ color: C.muted }}>
-            {bestBallLabel(bb)}
-          </span>
-          <div className="flex-1 min-w-0 text-right">
-            <div className="text-[10px] uppercase" style={{ color: C.pink }}>
-              Team B
-            </div>
-            {bb.t2.map((p) => (
-              <div key={p.id} className="text-sm truncate" style={{ color: C.text }}>
-                {p.name}
-              </div>
-            ))}
-          </div>
-        </div>
+        <div className="font-display text-lg mb-2" style={{ color: C.text }}>{game.name}</div>
+        <MatchStatus sideAName={bb.t1.map((p) => p.name).join(' + ')} sideBName={bb.t2.map((p) => p.name).join(' + ')} {...bb} perHole={bb.perHole.map((hole) => ({ hole: hole.i + 1, winner: hole.winner === 'team1' ? 'sideA' : hole.winner === 'team2' ? 'sideB' : 'halved' }))} />
         <div className="flex items-center justify-center gap-3 pt-2 text-[11px]" style={{ borderTop: `1px solid ${C.border}`, color: C.faint }}>
           <span>
             A won <span style={{ color: C.cyan }}>{bb.wonA}</span>
@@ -6540,7 +6589,6 @@ function GameScoreboardCard({ settings, round, course, players, patchGameData, r
       isSingles
         ? { a: seg.a.name, b: seg.b.name }
         : { a: seg.t1.map((p) => p.name).join(' + '), b: seg.t2.map((p) => p.name).join(' + ') };
-    const labelFor = (seg) => (isSingles ? matchLabel(seg) : teamMatchLabel(seg));
     if (holes.length < 18) {
       const seg = segment(0, holes.length);
       const names = sideNames(seg);
@@ -6549,11 +6597,7 @@ function GameScoreboardCard({ settings, round, course, players, patchGameData, r
           <div className="font-display text-lg mb-2" style={{ color: C.text }}>
             Nassau (single match — needs 18 holes for all 3 bets)
           </div>
-          <div className="flex items-center justify-between gap-2 py-2">
-            <span className="font-display text-sm flex-1" style={{ color: seg.diff > 0 ? C.gold : C.text }}>{names.a}</span>
-            <span className="font-display text-xs shrink-0" style={{ color: C.muted }}>{labelFor(seg)}</span>
-            <span className="font-display text-sm flex-1 text-right" style={{ color: seg.diff < 0 ? C.gold : C.text }}>{names.b}</span>
-          </div>
+          <MatchStatus sideAName={names.a} sideBName={names.b} {...seg} />
         </Card>
       );
     }
@@ -6569,14 +6613,10 @@ function GameScoreboardCard({ settings, round, course, players, patchGameData, r
           ['Overall', overall],
         ].map(([label, seg]) => {
           const names = sideNames(seg);
+          const isActive = seg.thru > 0 && !seg.clinched && seg.remaining > 0;
           return (
-            <div key={label} className="py-2" style={{ borderBottom: `1px solid ${C.border}` }}>
-              <div className="text-[10px] uppercase tracking-wide mb-1" style={{ color: C.muted }}>{label}</div>
-              <div className="flex items-center justify-between gap-2">
-                <span className="font-display text-sm flex-1" style={{ color: seg.diff > 0 ? C.gold : C.text }}>{names.a}</span>
-                <span className="font-display text-xs shrink-0" style={{ color: C.muted }}>{labelFor(seg)}</span>
-                <span className="font-display text-sm flex-1 text-right" style={{ color: seg.diff < 0 ? C.gold : C.text }}>{names.b}</span>
-              </div>
+            <div key={label} className="py-0.5" style={{ borderBottom: `1px solid ${C.border}` }}>
+              <MatchStatus title={`${label}${isActive ? ' · Live' : ''}`} sideAName={names.a} sideBName={names.b} {...seg} compact emphasized={isActive} />
             </div>
           );
         })}
@@ -6708,22 +6748,31 @@ function GameScoreboardCard({ settings, round, course, players, patchGameData, r
     const board = sixesBoard(round, course, activePlayers, useNet);
     if (!board) return <EmptyNote text="Sixes needs exactly four players." />;
     const rows = activePlayers.map((p) => ({ p, points: board.playerPoints[p.id] || 0 })).sort((a, b) => b.points - a.points);
+    const showFinalStandings = readOnly || board.segments.every((segment) => segment.settled);
+    const standings = <div className="mt-2">{rows.map(({ p, points }, index) => <BoardRow key={p.id} rank={index + 1} name={p.name} value={points} sub="match points" />)}</div>;
     return (
       <Card>
         <div className="font-display text-lg mb-2" style={{ color: C.text }}>Sixes · rotating partners</div>
-        {board.segments.map((segment) => (
-          <div key={segment.index} className="py-2" style={{ borderBottom: `1px solid ${C.border}` }}>
-            <div className="text-[10px] uppercase" style={{ color: C.muted }}>Holes {segment.start + 1}–{segment.end}</div>
-            <div className="flex items-center justify-between gap-2 text-xs mt-1">
-              <span className="flex-1" style={{ color: segment.diff > 0 ? C.cyan : C.text }}>{segment.t1.map((p) => p.name).join(' + ')}</span>
-              <span className="font-display shrink-0" style={{ color: C.gold }}>{segment.complete ? (segment.diff === 0 ? 'TIE' : `${Math.abs(segment.diff)} UP`) : `thru ${segment.thru}`}</span>
-              <span className="flex-1 text-right" style={{ color: segment.diff < 0 ? C.pink : C.text }}>{segment.t2.map((p) => p.name).join(' + ')}</span>
+        {board.segments.map((segment) => {
+          const isActive = segment.thru > 0 && !segment.settled;
+          return (
+            <div key={segment.index} className="mb-2">
+              <MatchStatus
+                title={`${segment.thru === 0 ? 'Upcoming · ' : ''}Holes ${segment.start + 1}–${segment.end}`}
+                sideAName={segment.t1.map((p) => p.name).join(' + ')}
+                sideBName={segment.t2.map((p) => p.name).join(' + ')}
+                {...segment}
+                compact={!isActive}
+              />
             </div>
-          </div>
-        ))}
-        <div className="mt-2">
-          {rows.map(({ p, points }, index) => <BoardRow key={p.id} rank={index + 1} name={p.name} value={points} sub="match points" />)}
-        </div>
+          );
+        })}
+        {showFinalStandings ? standings : (
+          <details className="mt-2 rounded-xl px-3 py-2" style={{ background: C.surface2, border: `1px solid ${C.border}` }}>
+            <summary className="text-[11px] font-semibold cursor-pointer" style={{ color: C.muted }}>Round match-point standings</summary>
+            {standings}
+          </details>
+        )}
       </Card>
     );
   }
@@ -6754,23 +6803,30 @@ function GameScoreboardCard({ settings, round, course, players, patchGameData, r
     if (!board) return <EmptyNote text="Assign every player to Team A or Team B." />;
     return (
       <Card>
-        <div className="font-display text-lg mb-2" style={{ color: C.text }}>{game.name} · Team Score</div>
+        <div className="flex items-start justify-between gap-3 mb-2">
+          <div className="font-display text-lg" style={{ color: C.text }}>{game.name} · Team Score</div>
+          <div className="text-right">
+            <div className="text-[9px] uppercase" style={{ color: C.faint }}>Scoring</div>
+            <div className="text-xs font-bold" style={{ color: C.lime }}>Stroke Play</div>
+          </div>
+        </div>
+        <div className="text-[10px] mb-2" style={{ color: C.muted }}>Official winner and payout are determined by the lowest team total.</div>
         {board.rows.map((team, index) => (
           <div key={team.id} className="flex items-center justify-between gap-3 py-2.5" style={{ borderBottom: `1px solid ${C.border}` }}>
             <div className="min-w-0">
               <div className="text-[10px] uppercase font-bold" style={{ color: index === 0 ? C.cyan : C.pink }}>Team {index === 0 ? 'A' : 'B'}</div>
               <div className="text-xs truncate" style={{ color: C.text }}>{team.name}</div>
-              <div className="text-[10px]" style={{ color: C.faint }}>CH {team.courseHandicap} · thru {team.thru}</div>
+              <div className="text-[10px]" style={{ color: C.faint }}>CH {team.courseHandicap} · {holes.length - team.thru} holes remaining</div>
             </div>
             <div className="text-right">
               <div className="font-display text-2xl" style={{ color: C.gold }}>{team.thru ? team.total : '–'}</div>
-              <div className="text-[10px]" style={{ color: C.muted }}>{useNet ? `${team.gross} gross` : 'gross'}</div>
+              <div className="text-xs font-bold" style={{ color: team.thru ? (team.relativeToPar <= 0 ? C.lime : C.text) : C.faint }}>
+                {team.thru ? (team.relativeToPar === 0 ? 'E' : `${team.relativeToPar > 0 ? '+' : ''}${team.relativeToPar}`) : 'relative to par'}
+              </div>
+              <div className="text-[10px]" style={{ color: C.muted }}>{useNet ? `${team.gross} gross · net total` : 'gross total'}</div>
             </div>
           </div>
         ))}
-        <div className="text-[11px] mt-2" style={{ color: C.muted }}>
-          Match: {board.matchDiff === 0 ? 'All Square' : `Team ${board.matchDiff > 0 ? 'A' : 'B'} ${Math.abs(board.matchDiff)} UP`} · thru {board.matchThru}
-        </div>
       </Card>
     );
   }
